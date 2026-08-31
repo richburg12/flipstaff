@@ -1,9 +1,2 @@
 node_modules/
-dist/
-client/dist/
-*.log
-.env
-.env.*
-.railway-token
-.DS_Store
-tsconfig.tsbuildinfo
+.vercel/

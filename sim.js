@@ -272,6 +272,22 @@
     f.state = f.grounded ? (Math.abs(f.vx) > 0.02 ? 'run' : 'idle') : 'air';
   }
 
+  // Gentle pushbox: standing inside your opponent is never a strategy.
+  function separate(f0, f1) {
+    if (f0.state === 'ko' || f1.state === 'ko') return;
+    if (Math.abs(f0.y - f1.y) > C.FH * 0.9) return; // different surfaces / passing
+    var dx = f1.x - f0.x;
+    var minD = C.FW * 0.9;
+    if (Math.abs(dx) >= minD) return;
+    var dir = dx === 0 ? -1 : (dx > 0 ? 1 : -1);
+    var push = Math.min((minD - Math.abs(dx)) / 2, 0.05);
+    f0.x -= dir * push;
+    f1.x += dir * push;
+    var hw = C.FW / 2;
+    if (f0.x < hw) f0.x = hw; if (f0.x > C.AW - hw) f0.x = C.AW - hw;
+    if (f1.x < hw) f1.x = hw; if (f1.x > C.AW - hw) f1.x = C.AW - hw;
+  }
+
   // ---------- hit resolution ----------
   function activeHitbox(f) {
     if (f.move === null) return null;
@@ -394,6 +410,7 @@
       case 'fight':
         tickFighter(f0, f1, i0);
         tickFighter(f1, f0, i1);
+        separate(f0, f1);
         game.events = resolveHits(game);
         break;
       case 'roundend':

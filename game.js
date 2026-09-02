@@ -39,6 +39,7 @@ const shell = {
   overT: 0, // frames since sim hit 'over' (guards accidental rematch taps)
   nudgeX: 0, nudgeY: 0, shake: 0,
   flash: 0, // full-panel white blink on KO
+  flipSfxT: -99,
   particles: [],
   rings: [],
   trails: [[], []], // staff-tip trails per fighter (world coords)
@@ -118,23 +119,49 @@ function prerenderBg() {
   b.strokeStyle = 'rgba(60,40,30,0.055)'; b.lineWidth = ar.s * 0.9; b.lineCap = 'round';
   b.beginPath(); b.arc(ar.x + ar.w / 2, ar.y + ar.h / 2, ar.h * 0.3, 0.6, 5.9); b.stroke();
 
-  // bold ink ground strokes: floor top and ceiling underside are walkable
-  const stroke = (yy) => {
+  // bold ink ground strokes: floor top and ceiling underside are walkable.
+  // The floor stroke breaks at the fire pit — the paper is burnt through.
+  const strokeSeg = (yy, wx0, wx1, edgeFade) => {
     b.strokeStyle = 'rgba(34,28,38,0.9)'; b.lineCap = 'round';
     b.lineWidth = Math.max(3, ar.s * 0.16);
-    b.beginPath(); b.moveTo(ar.x + 3, yy); b.lineTo(ar.x + ar.w - 3, yy); b.stroke();
+    b.beginPath(); b.moveTo(px(wx0) + (edgeFade ? 0 : 3), yy); b.lineTo(px(wx1) - (edgeFade ? 0 : 3), yy); b.stroke();
     b.strokeStyle = 'rgba(34,28,38,0.25)'; b.lineWidth = Math.max(6, ar.s * 0.34);
-    b.beginPath(); b.moveTo(ar.x + ar.w * 0.06, yy); b.lineTo(ar.x + ar.w * 0.94, yy); b.stroke();
+    b.beginPath(); b.moveTo(px(wx0 + (wx1 - wx0) * 0.06), yy); b.lineTo(px(wx1 - (wx1 - wx0) * 0.06), yy); b.stroke();
   };
-  stroke(py(0)); stroke(py(C.AH));
+  strokeSeg(py(C.AH), 0, C.AW, false); // ceiling: whole
+  strokeSeg(py(0), 0, C.PIT.x0, true); // floor left of the crack
+  strokeSeg(py(0), C.PIT.x1, C.AW, true); // floor right of the crack
 
-  // the one double-sided platform: a floating lacquer beam
-  const p = C.PLAT;
-  b.fillStyle = WOOD;
-  b.fillRect(px(p.x0), py(p.y1), (p.x1 - p.x0) * ar.s, (p.y1 - p.y0) * ar.s);
-  b.strokeStyle = 'rgba(34,28,38,0.9)'; b.lineWidth = Math.max(2.5, ar.s * 0.12); b.lineCap = 'round';
-  b.beginPath(); b.moveTo(px(p.x0) + 2, py(p.y1)); b.lineTo(px(p.x1) - 2, py(p.y1)); b.stroke();
-  b.beginPath(); b.moveTo(px(p.x0) + 2, py(p.y0)); b.lineTo(px(p.x1) - 2, py(p.y0)); b.stroke();
+  // the fire pit: charred, curling paper edges around a gap of darkness
+  // (the animated lava glow + embers are drawn per-frame in render())
+  {
+    const gx0 = px(C.PIT.x0), gx1 = px(C.PIT.x1), gy = py(0);
+    const ch = b.createLinearGradient(0, gy, 0, gy - ar.s * 1.1);
+    ch.addColorStop(0, 'rgba(30,14,8,0.85)');
+    ch.addColorStop(0.45, 'rgba(70,32,14,0.35)');
+    ch.addColorStop(1, 'rgba(70,32,14,0)');
+    b.fillStyle = ch;
+    b.fillRect(gx0 - ar.s * 0.35, gy - ar.s * 1.1, (gx1 - gx0) + ar.s * 0.7, ar.s * 1.1);
+    // jagged burnt rim, curling up at both lips
+    b.strokeStyle = '#1c0e07'; b.lineWidth = Math.max(2.5, ar.s * 0.13); b.lineCap = 'round';
+    b.beginPath();
+    b.moveTo(gx0 - ar.s * 0.35, gy);
+    b.quadraticCurveTo(gx0 - ar.s * 0.05, gy - ar.s * 0.05, gx0 + ar.s * 0.06, gy - ar.s * 0.3);
+    b.stroke();
+    b.beginPath();
+    b.moveTo(gx1 + ar.s * 0.35, gy);
+    b.quadraticCurveTo(gx1 + ar.s * 0.05, gy - ar.s * 0.05, gx1 - ar.s * 0.06, gy - ar.s * 0.3);
+    b.stroke();
+  }
+
+  // two double-sided platforms: floating lacquer beams, staggered like steps
+  for (const p of C.PLATS) {
+    b.fillStyle = WOOD;
+    b.fillRect(px(p.x0), py(p.y1), (p.x1 - p.x0) * ar.s, (p.y1 - p.y0) * ar.s);
+    b.strokeStyle = 'rgba(34,28,38,0.9)'; b.lineWidth = Math.max(2.5, ar.s * 0.12); b.lineCap = 'round';
+    b.beginPath(); b.moveTo(px(p.x0) + 2, py(p.y1)); b.lineTo(px(p.x1) - 2, py(p.y1)); b.stroke();
+    b.beginPath(); b.moveTo(px(p.x0) + 2, py(p.y0)); b.lineTo(px(p.x1) - 2, py(p.y0)); b.stroke();
+  }
 
   // hanko seal stamps, one per player corner (each near its owner's edge)
   const seal = (sx, sy, col, rot) => {
@@ -189,6 +216,7 @@ const sfx = {
   swingQ() { noiseBurst(0.06, 0.08, 1800); },
   swingH() { noiseBurst(0.16, 0.16, 700); },
   ko() { blip(110, 38, 1.1, 0.6, 'sine'); blip(220, 76, 0.9, 0.2, 'sine'); noiseBurst(0.4, 0.35, 200); },
+  pit() { noiseBurst(0.55, 0.4, 380); blip(95, 28, 1.0, 0.55, 'sawtooth'); blip(1900, 700, 0.35, 0.1, 'triangle'); noiseBurst(0.3, 0.2, 2600); },
   fight() { blip(90, 60, 0.25, 0.5, 'sine'); noiseBurst(0.12, 0.3, 250); },
   tap() { blip(700, 500, 0.05, 0.12, 'triangle'); },
 };
@@ -344,7 +372,12 @@ function stepSim() {
     }
     if (f.move === 'heavy' && f.mf === C.HEAVY.startup + 1 && f.hitstop === 0) sfx.swingH();
     prevMove[i] = f.move;
-    if (f.g !== prevG[i]) { sfx.flip(); prevG[i] = f.g; }
+    if (f.g !== prevG[i]) {
+      // flips are unlimited now — soft-throttle only the SOUND so spam
+      // doesn't clip the mix (the sim itself has no rate limit)
+      if (shell.t - shell.flipSfxT > 5) { sfx.flip(); shell.flipSfxT = shell.t; }
+      prevG[i] = f.g;
+    }
   }
   for (const e of evs) {
     if (e.type === 'hit') {
@@ -364,6 +397,14 @@ function stepSim() {
       shell.shake = 14;
       shell.flash = 8;
       sfx.ko();
+    } else if (e.type === 'pitdeath') {
+      // swallowed by the crack: a column of embers, a flash, a sizzle-gong
+      fireBurst(e.x, 0.3, 46);
+      inkBurst(e.x, 0.6, 14, INK, 0.22);
+      shell.rings.push({ x: e.x, y: 0.4, r: 0.3, life: 24, max: 24 });
+      shell.shake = 14;
+      shell.flash = 8;
+      sfx.pit();
     }
   }
   if (game.screen === 'fight' && prevScreen === 'intro') sfx.fight();
@@ -399,6 +440,29 @@ function inkBurst(x, y, n, col, speed) {
       x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
       life: 18 + Math.random() * 22 | 0, size: 0.05 + Math.random() * 0.12,
       col: Math.random() < 0.7 ? col : INK,
+    });
+  }
+}
+const EMBER_COLS = ['#ffb02e', '#ff7a2e', '#e04a1c', '#ffd77a'];
+function fireBurst(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    shell.particles.push({
+      x: x + (Math.random() - 0.5) * 0.8, y: y + Math.random() * 0.3,
+      vx: (Math.random() - 0.5) * 0.14, vy: 0.08 + Math.random() * 0.22,
+      life: 24 + Math.random() * 30 | 0, size: 0.04 + Math.random() * 0.1,
+      col: EMBER_COLS[(Math.random() * EMBER_COLS.length) | 0], ember: true,
+    });
+  }
+}
+// ambient embers drifting up out of the crack, every frame the panel is live
+function pitAmbient() {
+  if (Math.random() < 0.35) {
+    const p = C.PIT;
+    shell.particles.push({
+      x: p.x0 + 0.15 + Math.random() * (p.x1 - p.x0 - 0.3), y: 0.05,
+      vx: (Math.random() - 0.5) * 0.02, vy: 0.02 + Math.random() * 0.05,
+      life: 36 + Math.random() * 44 | 0, size: 0.03 + Math.random() * 0.07,
+      col: EMBER_COLS[(Math.random() * EMBER_COLS.length) | 0], ember: true,
     });
   }
 }
@@ -664,6 +728,27 @@ function drawFighter(f, i) {
 }
 
 // ---------- world-space fx ----------
+// The molten crack: flickering glow rising out of the burnt gap in the floor.
+// Orientation-neutral on purpose — it reads as fire from both seats.
+function drawPitGlow() {
+  const p = C.PIT;
+  const gx0 = px(p.x0), gx1 = px(p.x1), gy = py(0);
+  const flick = 0.7 + 0.2 * Math.sin(shell.t * 0.11) + 0.1 * Math.sin(shell.t * 0.37 + 1.7);
+  const h = ar.s * 2.8;
+  const grad = ctx.createLinearGradient(0, gy, 0, gy - h);
+  grad.addColorStop(0, `rgba(255,122,40,${0.42 * flick})`);
+  grad.addColorStop(0.4, `rgba(255,150,60,${0.16 * flick})`);
+  grad.addColorStop(1, 'rgba(255,150,60,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(gx0 - ar.s * 0.4, gy - h, (gx1 - gx0) + ar.s * 0.8, h);
+  // molten core lines along the gap
+  ctx.fillStyle = `rgba(255,190,80,${0.45 + 0.35 * flick})`;
+  ctx.fillRect(gx0, gy - Math.max(2.5, ar.s * 0.12), gx1 - gx0, Math.max(2.5, ar.s * 0.12));
+  const wob = Math.sin(shell.t * 0.23) * 0.3;
+  ctx.fillStyle = `rgba(255,240,180,${0.35 * flick})`;
+  ctx.fillRect(gx0 + ar.s * (0.4 + wob), gy - Math.max(2, ar.s * 0.07), (gx1 - gx0) - ar.s * (0.8 + wob * 2), Math.max(2, ar.s * 0.07));
+}
+
 function drawTrails() {
   for (let i = 0; i < 2; i++) {
     const tr = shell.trails[i];
@@ -689,9 +774,11 @@ function drawTrails() {
 function drawParticles() {
   for (const pt of shell.particles) {
     pt.x += pt.vx; pt.y += pt.vy;
-    pt.vy -= 0.006; pt.vx *= 0.97; pt.vy *= 0.97;
+    if (pt.ember) { pt.vy *= 0.985; pt.vx += (Math.random() - 0.5) * 0.01; } // embers waft up
+    else { pt.vy -= 0.006; pt.vx *= 0.97; pt.vy *= 0.97; }
     pt.life--;
-    ctx.globalAlpha = Math.min(1, pt.life / 12) * 0.85;
+    const flick = pt.ember ? 0.6 + 0.4 * Math.random() : 1;
+    ctx.globalAlpha = Math.min(1, pt.life / 12) * 0.85 * flick;
     ctx.fillStyle = pt.col;
     ctx.beginPath(); ctx.arc(px(pt.x), py(pt.y), pt.size * ar.s, 0, Math.PI * 2); ctx.fill();
   }
@@ -806,7 +893,6 @@ function drawZoneFor(p) {
 
   // buttons (right half)
   const B = buttonsLocal();
-  const f = game.fighters[p];
   for (const k of ['quick', 'heavy', 'flip']) {
     const btn = B[k];
     const flash = ts.btnFlash[k];
@@ -837,14 +923,7 @@ function drawZoneFor(p) {
       ctx.beginPath(); ctx.moveTo(btn.x - btn.r * 0.44, btn.y - btn.r * 0.08); ctx.lineTo(btn.x - btn.r * 0.28, btn.y - btn.r * 0.34); ctx.lineTo(btn.x - btn.r * 0.12, btn.y - btn.r * 0.08); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(btn.x + btn.r * 0.28, btn.y - btn.r * 0.34); ctx.lineTo(btn.x + btn.r * 0.28, btn.y + btn.r * 0.3); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(btn.x + btn.r * 0.12, btn.y + btn.r * 0.08); ctx.lineTo(btn.x + btn.r * 0.28, btn.y + btn.r * 0.34); ctx.lineTo(btn.x + btn.r * 0.44, btn.y + btn.r * 0.08); ctx.stroke();
-      // cooldown sweep
-      if (f && f.flipCd > 0) {
-        ctx.fillStyle = 'rgba(20,16,24,0.55)';
-        ctx.beginPath();
-        ctx.moveTo(btn.x, btn.y);
-        ctx.arc(btn.x, btn.y, btn.r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (f.flipCd / C.FLIP_CD));
-        ctx.closePath(); ctx.fill();
-      }
+      // no cooldown on FLIP — the button is always live
     }
     ctx.fillStyle = 'rgba(240,230,205,0.5)';
     ctx.font = `9px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -892,8 +971,9 @@ function drawBanners() {
     }
   } else if (g.screen === 'roundend') {
     const w = g.roundWinner;
+    const pit = g.roundEndCause === 'pit';
     bothEdgesText([
-      ['K.O.', Math.min(56, W * 0.13), INK],
+      pit ? ['INTO THE FIRE', Math.min(36, W * 0.085), '#c8511f'] : ['K.O.', Math.min(56, W * 0.13), INK],
       [`${PNAME[w]} takes the round`, Math.min(19, W * 0.045), PCOL[w]],
     ]);
   } else if (g.screen === 'over') {
@@ -920,7 +1000,7 @@ function drawTitle() {
 
   const cx = W / 2;
   const u = Math.min(W / 390, 1.25); // type scale
-  let y = sy + sh * 0.075;
+  let y = sy + sh * 0.055;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 
   // title + seal
@@ -934,23 +1014,38 @@ function drawTitle() {
   ctx.strokeRect(-6.5, -6.5, 13, 13);
   ctx.beginPath(); ctx.moveTo(-6.5, 0); ctx.lineTo(6.5, 0); ctx.stroke();
   ctx.restore();
-  y += 30 * u;
+  y += 27 * u;
   ctx.font = `${13.5 * u}px ${FONT}`;
   ctx.fillStyle = 'rgba(34,28,38,0.8)';
   ctx.fillText(AI_ON ? 'a staff duel in a box — you vs the AI' : 'a staff duel in a box — two players, one phone', cx, y);
   if (AI_ON) {
     ctx.fillStyle = P1COL; ctx.font = `700 ${11 * u}px ${FONT}`;
-    ctx.fillText('VS AI', cx, y + 17 * u);
+    ctx.fillText('VS AI', cx, y + 16 * u);
   }
-  y += 30 * u;
+  y += 24 * u;
 
-  // arena diagram: closed box, two fighters, flip arc
-  const dw = Math.min(sw * 0.6, 220 * u), dh = dw * 0.6;
+  // arena diagram: closed box, two fighters, steps, fire pit, flip arc
+  const dw = Math.min(sw * 0.56, 200 * u), dh = dw * 0.55;
   const dx0 = cx - dw / 2, dy0 = y;
   ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.strokeRect(dx0, dy0, dw, dh);
   ctx.lineWidth = 2;
   ctx.strokeStyle = 'rgba(34,28,38,0.5)';
-  ctx.strokeRect(dx0 + dw * 0.36, dy0 + dh * 0.47, dw * 0.28, dh * 0.06); // platform
+  // the two staggered step platforms
+  ctx.strokeRect(dx0 + dw * 0.36, dy0 + dh * 0.42, dw * 0.28, dh * 0.06);
+  ctx.strokeRect(dx0 + dw * 0.1, dy0 + dh * 0.62, dw * 0.5, dh * 0.06);
+  // the fire pit: a glowing gap in the right floor
+  ctx.strokeStyle = PAPER_HI; ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(dx0 + dw * 0.72, dy0 + dh); ctx.lineTo(dx0 + dw * 0.85, dy0 + dh);
+  ctx.stroke();
+  ctx.fillStyle = '#e0621f';
+  ctx.beginPath();
+  ctx.moveTo(dx0 + dw * 0.725, dy0 + dh - 1);
+  ctx.lineTo(dx0 + dw * 0.765, dy0 + dh - 7 * u);
+  ctx.lineTo(dx0 + dw * 0.785, dy0 + dh - 3 * u);
+  ctx.lineTo(dx0 + dw * 0.81, dy0 + dh - 8 * u);
+  ctx.lineTo(dx0 + dw * 0.845, dy0 + dh - 1);
+  ctx.closePath(); ctx.fill();
   const mini = (x, yy, col, up) => {
     ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
     const s = up ? -1 : 1;
@@ -969,20 +1064,22 @@ function drawTitle() {
   y = dy0 + dh + 16 * u;
   ctx.fillStyle = 'rgba(34,28,38,0.85)';
   ctx.font = `${12 * u}px ${FONT}`;
-  ctx.fillText('A closed box: floor AND ceiling are ground.', cx, y); y += 15 * u;
-  ctx.fillText('Your fighter stands upright on YOUR floor.', cx, y); y += 15 * u;
-  ctx.fillText('FLIP inverts your gravity — arc across, somersault,', cx, y); y += 15 * u;
-  ctx.fillText('land feet-first on the far surface. ~1s cooldown.', cx, y); y += 24 * u;
+  ctx.fillText('A closed box: floor AND ceiling are ground, plus two', cx, y); y += 14.5 * u;
+  ctx.fillText('stepped ledges. Your fighter stands upright on YOUR floor;', cx, y); y += 14.5 * u;
+  ctx.fillText('FLIP inverts your gravity — somersault across, land feet-first.', cx, y); y += 14.5 * u;
+  ctx.fillStyle = '#b3491c';
+  ctx.fillText('The molten crack in the right floor is INSTANT DEATH.', cx, y); y += 14.5 * u;
+  ctx.fillText('The ceiling is whole — flipping up is always the escape.', cx, y); y += 22 * u;
 
   // controls
   const line = (head, body, col) => {
-    ctx.font = `700 ${12.5 * u}px ${FONT}`;
+    ctx.font = `700 ${12 * u}px ${FONT}`;
     ctx.fillStyle = col || INK;
-    ctx.fillText(head, cx, y); y += 15 * u;
+    ctx.fillText(head, cx, y); y += 14 * u;
     ctx.font = `${11.5 * u}px ${FONT}`;
     ctx.fillStyle = 'rgba(34,28,38,0.85)';
-    for (const t of body) { ctx.fillText(t, cx, y); y += 14 * u; }
-    y += 7 * u;
+    for (const t of body) { ctx.fillText(t, cx, y); y += 13 * u; }
+    y += 5.5 * u;
   };
   line('LEFT THUMB — footwork', [
     'drag ↔ run · flick ↑ jump · pull ↓ and HOLD to block',
@@ -992,16 +1089,21 @@ function drawTitle() {
     'HEAVY · hands slide to the staff’s end (the tell!), then a full',
     'overhead arc. 20 dmg, long reach — but the finish pose is HELD',
     'for a beat. Whiff it and you WILL be punished.',
-    'FLIP · invert your gravity. Dodge a heavy with it. Feel great.',
+    'FLIP · invert your gravity. NO cooldown — chain flips to hover,',
+    'juke a heavy, or bail out over the fire.',
   ]);
   line('BLOCK', [
     'A vertical staff wall — stops hits from the FRONT only.',
     'Every block slides you back; a blocked HEAVY shoves you far.',
     'Backs are open: flip over a turtle and strike from behind.',
   ], INK);
+  line('IN THE AIR', [
+    'Airborne fighters take ~1.65x knockback — batter a floating',
+    'opponent across the box, or straight into the crack.',
+  ]);
   ctx.font = `700 ${12.5 * u}px ${FONT}`;
   ctx.fillStyle = INK;
-  ctx.fillText('KO wins the round — first to 3 rounds wins.', cx, y);
+  ctx.fillText('KO or the fire wins the round — first to 3 rounds wins.', cx, y);
 
   // closing note
   const pulse = 0.55 + 0.45 * Math.sin(shell.t * 0.07);
@@ -1028,6 +1130,8 @@ function render() {
   // clip world drawing to the paper panel
   ctx.save();
   ctx.beginPath(); ctx.rect(ar.x, ar.y, ar.w, ar.h); ctx.clip();
+  drawPitGlow();
+  pitAmbient();
   drawTrails();
   drawFighter(game.fighters[0], 0);
   drawFighter(game.fighters[1], 1);

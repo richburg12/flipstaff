@@ -22,7 +22,19 @@
     AH: 18, // floor-to-ceiling interior height
     FW: 0.9, // fighter hurtbox width
     FH: 2.0, // fighter hurtbox height
-    PLAT: { x0: 5.75, y0: 8.7, x1: 10.25, y1: 9.3 }, // one double-sided platform, dead centre
+    // Two double-sided platforms, staggered like steps and overlapping
+    // mid-field: the wide low one sits left (the safe side), the small high
+    // one centre-right. A jump (2.5u) links the low top to the high top.
+    PLATS: [
+      { x0: 5.75, y0: 7.4, x1: 10.25, y1: 8.0 }, // high step, 4.5u
+      { x0: 1.5, y0: 5.2, x1: 9.5, y1: 5.8 }, // low step, 8u (half the field)
+    ],
+    // The fire pit: a molten crack in the BOTTOM floor only, right of centre.
+    // Fall in = instant loss of the round. The ceiling is whole — flipping up
+    // is the escape, and fighting with floor gravity on that side is a risk.
+    PIT: { x0: 11.5, x1: 13.5 },
+    PIT_KILL_Y: -0.35, // feet below this inside the crack = gone
+    SINK_Y: -2.5, // bodies stop sinking here (hidden under the paper)
 
     // movement (units per frame @60Hz)
     RUN: 0.13,
@@ -34,8 +46,10 @@
     JUMP: 0.4,
     COYOTE: 5,
 
-    // gravity flip — the signature move
-    FLIP_CD: 60, // ~1 s between flips: no spam-hovering
+    // gravity flip — the signature move. NO cooldown: chain flips freely
+    // (rapid alternation lets you hover mid-air — that's a technique, not a
+    // bug). The only gates are the natural ones: not while attacking,
+    // blocking, or in hitstun.
     FLIP_ANIM: 13, // frames the somersault takes to visually re-orient
 
     // combat
@@ -51,6 +65,12 @@
     PB_HEAVY: 0.9, // blocked HEAVY shoves the blocker far back — turtling loses ground
     KB_QUICK: { vx: 0.2, up: 0.1, stun: 14 },
     KB_HEAVY: { vx: 0.4, up: 0.2, stun: 26 },
+    KB_AIR: 1.65, // horizontal knockback multiplier vs an AIRBORNE victim
+    // Per-frame vx decay all through hitstun. Without it every heavy carried
+    // victims 7-10u — half the floor would have been an auto-pit and the
+    // airborne rule would never read. With it: grounded heavy ~2u carry,
+    // midair heavy ~3.5u — deadly beside the crack, survivable mid-arena.
+    KB_DRAG: 0.84,
     HITSTOP_QUICK: 6,
     HITSTOP_HEAVY: 10,
 
@@ -87,7 +107,7 @@
       koT: -1,
       grounded: true,
       coyote: 0,
-      flipCd: 0,
+      pitDead: false,
       flipAnimT: 99, // frames since last flip (render somersault)
       flipDir: 1, // somersault spin direction
       // per-round bookkeeping for the shell
@@ -99,7 +119,7 @@
     // Each fighter starts on the surface nearest its OWN player's edge.
     // Fighter 0 = bottom player = floor; fighter 1 = top player = ceiling.
     var left = (roundNum % 2 === 0) === (f.i === 0);
-    f.x = left ? C.AW * 0.28 : C.AW * 0.72;
+    f.x = left ? C.AW * 0.25 : C.AW * 0.645; // right spawn stays clear of the pit
     f.g = f.i === 0 ? 1 : -1;
     f.y = f.i === 0 ? C.FH / 2 : C.AH - C.FH / 2;
     f.vx = 0; f.vy = 0;
@@ -107,49 +127,67 @@
     f.state = 'idle'; f.move = null; f.mf = 0; f.hitDone = false;
     f.blockF = 0; f.hitstun = 0; f.hitstop = 0; f.koT = -1;
     f.grounded = true; f.coyote = C.COYOTE;
-    f.flipCd = 0; f.flipAnimT = 99;
+    f.pitDead = false; f.flipAnimT = 99;
     f.facing = f.x < C.AW / 2 ? 1 : -1;
   }
 
-  // ---------- physics: move-and-correct vs the closed box + platform ----------
+  // ---------- physics: move-and-correct vs the closed box + platforms + pit ----------
+  function overPit(x) {
+    return x > C.PIT.x0 && x < C.PIT.x1; // support is lost when the CENTRE crosses
+  }
+
   function physics(f) {
-    var hw = C.FW / 2, hh = C.FH / 2, p = C.PLAT;
+    var hw = C.FW / 2, hh = C.FH / 2, i, p;
     f.grounded = false;
 
     // x axis
     f.x += f.vx;
     if (f.x < hw) { f.x = hw; f.vx = 0; }
     if (f.x > C.AW - hw) { f.x = C.AW - hw; f.vx = 0; }
-    if (f.x + hw > p.x0 && f.x - hw < p.x1 && f.y + hh > p.y0 && f.y - hh < p.y1) {
-      if (f.vx > 0) f.x = p.x0 - hw;
-      else if (f.vx < 0) f.x = p.x1 + hw;
-      f.vx = 0;
+    for (i = 0; i < C.PLATS.length; i++) {
+      p = C.PLATS[i];
+      if (f.x + hw > p.x0 && f.x - hw < p.x1 && f.y + hh > p.y0 && f.y - hh < p.y1) {
+        if (f.vx > 0) f.x = p.x0 - hw;
+        else if (f.vx < 0) f.x = p.x1 + hw;
+        f.vx = 0;
+      }
     }
 
     // y axis
     f.y += f.vy;
-    if (f.y - hh < 0) { // floor
+    if (f.y - hh < 0 && !overPit(f.x)) { // floor — unless the crack yawns below
       f.y = hh; f.vy = 0;
       if (f.g === 1) f.grounded = true;
     }
-    if (f.y + hh > C.AH) { // ceiling
+    if (f.y + hh > C.AH) { // ceiling — always whole
       f.y = C.AH - hh; f.vy = 0;
       if (f.g === -1) f.grounded = true;
     }
-    if (f.x + hw > p.x0 && f.x - hw < p.x1 && f.y + hh > p.y0 && f.y - hh < p.y1) {
-      if (f.vy < 0) { // moving down: rest on platform top
-        f.y = p.y1 + hh; f.vy = 0;
-        if (f.g === 1) f.grounded = true;
-      } else if (f.vy > 0) { // moving up: rest against platform underside
-        f.y = p.y0 - hh; f.vy = 0;
-        if (f.g === -1) f.grounded = true;
+    for (i = 0; i < C.PLATS.length; i++) {
+      p = C.PLATS[i];
+      if (f.x + hw > p.x0 && f.x - hw < p.x1 && f.y + hh > p.y0 && f.y - hh < p.y1) {
+        if (f.vy < 0) { // moving down: rest on platform top
+          f.y = p.y1 + hh; f.vy = 0;
+          if (f.g === 1) f.grounded = true;
+        } else if (f.vy > 0) { // moving up: rest against platform underside
+          f.y = p.y0 - hh; f.vy = 0;
+          if (f.g === -1) f.grounded = true;
+        }
       }
     }
     // resting contact (vy == 0 exactly on a surface)
     if (!f.grounded && f.vy === 0) {
-      if (f.g === 1 && (f.y - hh <= 1e-9 || (f.y - hh <= p.y1 + 1e-9 && f.y - hh >= p.y1 - 1e-6 && f.x + hw > p.x0 && f.x - hw < p.x1))) f.grounded = true;
-      if (f.g === -1 && (f.y + hh >= C.AH - 1e-9 || (f.y + hh >= p.y0 - 1e-9 && f.y + hh <= p.y0 + 1e-6 && f.x + hw > p.x0 && f.x - hw < p.x1))) f.grounded = true;
+      if (f.g === 1 && f.y - hh <= 1e-9 && !overPit(f.x)) f.grounded = true;
+      if (f.g === -1 && f.y + hh >= C.AH - 1e-9) f.grounded = true;
+      for (i = 0; i < C.PLATS.length && !f.grounded; i++) {
+        p = C.PLATS[i];
+        if (f.x + hw <= p.x0 || f.x - hw >= p.x1) continue;
+        if (f.g === 1 && Math.abs(f.y - hh - p.y1) <= 1e-6) f.grounded = true;
+        if (f.g === -1 && Math.abs(f.y + hh - p.y0) <= 1e-6) f.grounded = true;
+      }
     }
+    // bodies that fell into the crack stop sinking just under the paper
+    if (f.y < C.SINK_Y) { f.y = C.SINK_Y; f.vy = 0; }
     if (f.grounded) f.coyote = C.COYOTE;
     else if (f.coyote > 0) f.coyote--;
   }
@@ -161,7 +199,6 @@
 
   function doFlip(f) {
     f.g = -f.g;
-    f.flipCd = C.FLIP_CD;
     f.flipAnimT = 0;
     f.flipDir = f.vx !== 0 ? (f.vx > 0 ? 1 : -1) : f.facing;
     f.grounded = false;
@@ -189,10 +226,10 @@
       return;
     }
     if (f.hitstop > 0) { f.hitstop--; return; } // frozen — impact frames
-    if (f.flipCd > 0) f.flipCd--;
 
     if (f.hitstun > 0) {
       f.hitstun--;
+      f.vx *= C.KB_DRAG; // launched, then bleeding speed — not a rail-gun ride
       gravity(f);
       physics(f);
       if (f.hitstun === 0) f.state = f.grounded ? 'idle' : 'air';
@@ -240,8 +277,9 @@
     }
     if (f.blockF > 0) f.blockF = 0; // released
 
-    // gravity flip — allowed any time you're actionable, ground or air
-    if (inp.flip && f.flipCd === 0) doFlip(f);
+    // gravity flip — allowed any time you're actionable, ground or air,
+    // as often as you like (chained flips hover; that's the tech)
+    if (inp.flip) doFlip(f);
 
     // jump (in local up), with coyote grace
     if (inp.jump && (f.grounded || f.coyote > 0)) {
@@ -332,8 +370,9 @@
 
       // CLEAN HIT (behind-block hits land here too)
       var kb = heavy ? C.KB_HEAVY : C.KB_QUICK;
+      var airMult = vic.grounded ? 1 : C.KB_AIR; // airborne victims FLY
       vic.hp -= hb.m.dmg;
-      vic.vx = away * kb.vx;
+      vic.vx = away * kb.vx * airMult;
       vic.vy = kb.up * upSign(vic); // pop in the victim's own "up"
       vic.hitstun = kb.stun;
       vic.state = 'hitstun';
@@ -354,6 +393,7 @@
         game.screen = 'roundend';
         game.roundEndT = 0;
         game.roundWinner = atk.i;
+        game.roundEndCause = 'ko';
         ev.push({ type: 'ko', x: vic.x, y: vic.y, victim: vic.i });
       }
     }
@@ -369,6 +409,7 @@
       introT: 0,
       roundEndT: 0,
       roundWinner: -1,
+      roundEndCause: null, // 'ko' | 'pit'
       winner: -1,
       wins: [0, 0],
       fighters: [newFighter(0), newFighter(1)],
@@ -386,11 +427,34 @@
     game.introT = 0;
     game.roundEndT = 0;
     game.roundWinner = -1;
+    game.roundEndCause = null;
     game.winner = -1;
     game.wins = [0, 0];
     spawn(game.fighters[0], 0);
     spawn(game.fighters[1], 0);
     game.events = [];
+  }
+
+  // Fell into the fire: instant loss of the round, however you got there —
+  // walked in, knocked in, or flipped down carelessly.
+  function checkPit(game, f) {
+    if (f.state === 'ko' || f.y - C.FH / 2 >= C.PIT_KILL_Y) return;
+    f.state = 'ko';
+    f.koT = 0;
+    f.hp = 0;
+    f.hitstun = 0;
+    f.move = null;
+    f.blockF = 0;
+    f.pitDead = true;
+    game.events.push({ type: 'pitdeath', x: f.x, y: 0.4, victim: f.i });
+    if (game.screen === 'fight') {
+      var w = 1 - f.i;
+      game.wins[w]++;
+      game.screen = 'roundend';
+      game.roundEndT = 0;
+      game.roundWinner = w;
+      game.roundEndCause = 'pit';
+    }
   }
 
   var IDLE = emptyInput();
@@ -412,11 +476,16 @@
         tickFighter(f1, f0, i1);
         separate(f0, f1);
         game.events = resolveHits(game);
+        checkPit(game, f0);
+        checkPit(game, f1);
         break;
       case 'roundend':
-        // loser crumples, winner settles; no inputs, no hits
+        // loser crumples, winner settles; no inputs, no hits — but a body
+        // still mid-air over the crack keeps falling in
         tickFighter(f0, f1, IDLE);
         tickFighter(f1, f0, IDLE);
+        checkPit(game, f0);
+        checkPit(game, f1);
         game.roundEndT++;
         if (game.roundEndT >= C.ROUNDEND_F) {
           if (game.wins[game.roundWinner] >= C.ROUNDS_TO_WIN) {
@@ -475,6 +544,75 @@
   }
 
   function aiInput(game, ai) {
+    var inp = aiDecide(game, ai);
+    aiGuard(game, ai, inp);
+    return inp;
+  }
+
+  // Arena sense, applied to the finished InputFrame — the AI stays honest
+  // (only its own inputs are adjusted, like a careful thumb): it does not
+  // stroll into the fire, does not flip down onto it, and uses the designed
+  // escape (flip up) when falling toward it. A rare authentic blunder stays.
+  function aiGuard(game, ai, inp) {
+    var me = game.fighters[1];
+    var r = ai.rng;
+    var overCrack = me.x > C.PIT.x0 - 0.35 && me.x < C.PIT.x1 + 0.35;
+    if (me.g === 1) {
+      // falling toward the crack: flip up — the escape the arena teaches
+      if (!me.grounded && overCrack && me.vy <= 0 && me.hitstun === 0 &&
+          me.move === null && me.y < 7 && r() > 0.06) {
+        inp.flip = true;
+      }
+      // steer off the crack while airborne above it
+      if (!me.grounded && overCrack) inp.mx = me.x < (C.PIT.x0 + C.PIT.x1) / 2 ? -1 : 1;
+      // never walk in (except the rare genuine mistake); when the way across
+      // is barred, sometimes take the high road instead — flip to the ceiling
+      if (me.grounded && r() > 0.012) {
+        if (inp.mx > 0 && me.x < C.PIT.x1 && me.x > C.PIT.x0 - 1.3) {
+          inp.mx = 0;
+          if (r() < 0.04) inp.flip = true;
+        }
+        if (inp.mx < 0 && me.x > C.PIT.x0 && me.x < C.PIT.x1 + 1.3) {
+          inp.mx = 0;
+          if (r() < 0.04) inp.flip = true;
+        }
+      }
+    } else if (inp.flip && overCrack && r() > 0.02) {
+      // don't flip DOWN into the fire from above it
+      inp.flip = false;
+    }
+  }
+
+  // Where would a flip from here land me? (surface y for my feet, or the fire)
+  function flipLanding(me) {
+    var gNew = -me.g;
+    var res = { y: gNew === 1 ? C.FH / 2 : C.AH - C.FH / 2, plat: -1 };
+    if (gNew === 1 && me.x > C.PIT.x0 && me.x < C.PIT.x1) res.y = -99;
+    for (var i = 0; i < C.PLATS.length; i++) {
+      var p = C.PLATS[i];
+      if (me.x <= p.x0 || me.x >= p.x1) continue;
+      if (gNew === 1) {
+        var top = p.y1 + C.FH / 2;
+        if (top <= me.y + 1e-6 && (res.y === -99 || top > res.y)) { res.y = top; res.plat = i; }
+      } else {
+        var bot = p.y0 - C.FH / 2;
+        if (bot >= me.y - 1e-6 && bot < res.y) { res.y = bot; res.plat = i; }
+      }
+    }
+    return res;
+  }
+  // Index of the platform I'm currently standing on (either face), or -1.
+  function platUnderfoot(me) {
+    for (var i = 0; i < C.PLATS.length; i++) {
+      var p = C.PLATS[i];
+      if (me.x <= p.x0 || me.x >= p.x1) continue;
+      if (me.g === 1 && Math.abs(me.y - C.FH / 2 - p.y1) < 0.05) return i;
+      if (me.g === -1 && Math.abs(me.y + C.FH / 2 - p.y0) < 0.05) return i;
+    }
+    return -1;
+  }
+
+  function aiDecide(game, ai) {
     var inp = emptyInput();
     var me = game.fighters[1], foe = game.fighters[0];
 
@@ -501,7 +639,7 @@
       ai.threatSeen = true;
       var t = r();
       if (t < AI.BLOCK_REACT) { ai.blockT = 30; inp.block = true; return inp; }
-      else if (t < AI.BLOCK_REACT + AI.FLIP_EVADE && me.flipCd === 0) { inp.flip = true; return inp; }
+      else if (t < AI.BLOCK_REACT + AI.FLIP_EVADE) { inp.flip = true; return inp; }
       else if (t < 0.85) { ai.mx = -toward; ai.moveT = 18; }
       // else: caught flat-footed
     }
@@ -530,21 +668,35 @@
         ai.mx = r() < 0.5 ? 0 : (r() < 0.5 ? 1 : -1);
         ai.moveT = 20;
       } else if (!engaged) {
-        // foe is on the other surface: line up and flip over to them
-        if (adx < 2.4 && me.flipCd === 0 && r() < 0.55) inp.flip = true;
-        else { ai.mx = toward; ai.moveT = 26; }
-        if (r() < 0.06 && me.flipCd === 0) inp.flip = true; // the occasional stylish flip
+        // foe is on another surface: line up and flip over to them — unless a
+        // shelf blocks the route, in which case walk off its edge first
+        var land = flipLanding(me);
+        var reach = land.y > -50 && Math.abs(land.y - seen.y) < 2.6;
+        var shelf = platUnderfoot(me);
+        if (reach && (adx < 2.4 ? r() < 0.55 : adx < 5 && r() < 0.3)) {
+          inp.flip = true; // lined up (or close enough): drop in on them
+        } else if (!reach && (shelf >= 0 || land.plat >= 0)) {
+          var bp = C.PLATS[shelf >= 0 ? shelf : land.plat];
+          ai.mx = me.x - bp.x0 < bp.x1 - me.x ? -1 : 1;
+          ai.moveT = 30;
+        } else {
+          ai.mx = toward; ai.moveT = 26;
+        }
+        if (r() < 0.06 && reach) inp.flip = true; // the occasional stylish flip
       } else if (adx < 2.0) {
-        // in range: mostly quick, sometimes heavy, sometimes turtle or step out
+        // in range: mostly quick, sometimes heavy, sometimes turtle or step
+        // out. When hits would carry the foe toward the fire (foe on floor
+        // gravity, to our right), lean mildly into the launchier options.
+        var pitPush = toward > 0 && seen.g === 1;
         var a2 = r();
         if (a2 < 0.48) inp.quick = true;
-        else if (a2 < 0.62) inp.heavy = true;
-        else if (a2 < 0.74) { ai.blockT = 26; inp.block = true; }
+        else if (a2 < (pitPush ? 0.7 : 0.62)) inp.heavy = true;
+        else if (a2 < (pitPush ? 0.78 : 0.74)) { ai.blockT = 26; inp.block = true; }
         else if (a2 < 0.9) { ai.mx = -toward; ai.moveT = 14; }
         // else stand and watch (human-ish)
       } else if (adx < 3.0) {
         // spacing band: poke heavy occasionally (this is where it whiffs)
-        if (r() < 0.22) inp.heavy = true;
+        if (r() < (toward > 0 && seen.g === 1 ? 0.3 : 0.22)) inp.heavy = true;
         else { ai.mx = toward; ai.moveT = 22; }
         if (r() < 0.07) inp.jump = true;
       } else {

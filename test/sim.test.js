@@ -178,12 +178,11 @@ function run(g, n, i0, i1) {
   ok(f1.g === -1 && Math.abs(f1.y - (C.AH - C.FH / 2)) < 1e-6, 'f1 spawns standing on the ceiling (their own floor)');
 
   // flip f0: must arc across and land feet-first on the ceiling
-  f0.x = 3; // off-platform column so it crosses the whole box
+  f0.x = 10.9; // the clear column between the high step and the pit
   const fl = I(); fl.flip = true;
   run(g, 1, () => fl, null);
   ok(f0.g === -1, 'flip inverts gravity for that fighter only');
   ok(f1.g === -1 && f1.grounded, 'opponent gravity untouched');
-  ok(f0.flipCd === C.FLIP_CD, 'flip cooldown armed');
   let frames = 0;
   while (!f0.grounded && frames < 300) { SIM.step(g, [I(), I()]); frames++; }
   approx(f0.y, C.AH - C.FH / 2, 1e-6, 'lands resting on the ceiling');
@@ -203,18 +202,45 @@ function run(g, n, i0, i1) {
   ok(f0.x > x0 + 1.0, 'carries forward smoothly through the arc');
 }
 {
-  // cooldown enforced: second flip inside 1s is ignored
+  // NO cooldown: consecutive-tick flips are all honored
   const g = fightReady();
   const f0 = g.fighters[0];
-  f0.x = 3;
+  f0.x = 4;
   const fl = I(); fl.flip = true;
   run(g, 1, () => fl, null);
   ok(f0.g === -1, 'first flip taken');
-  run(g, 10, () => fl, null); // spam
-  ok(f0.g === -1, 'flip spam inside cooldown ignored (no hovering)');
-  run(g, C.FLIP_CD, null, null); // wait out the cooldown
   run(g, 1, () => fl, null);
-  ok(f0.g === 1, 'flip available again after ~1s cooldown');
+  ok(f0.g === 1, 'flip on the very next tick also taken — no cooldown');
+  run(g, 1, () => fl, null);
+  ok(f0.g === -1, 'third consecutive flip too');
+}
+{
+  // flip-spam stability: alternate every tick for 10s — hovering is allowed,
+  // and the sim must stay sane (no NaNs, no tunneling out of the box)
+  const g = fightReady();
+  const f0 = g.fighters[0];
+  f0.x = 4;
+  const fl = I(); fl.flip = true;
+  let sane = true, minY = 99, maxY = -99;
+  for (let k = 0; k < 600; k++) {
+    SIM.step(g, [fl, I()]);
+    if (!Number.isFinite(f0.x) || !Number.isFinite(f0.y) || !Number.isFinite(f0.vy)) sane = false;
+    minY = Math.min(minY, f0.y); maxY = Math.max(maxY, f0.y);
+  }
+  ok(sane, 'flip spam every tick for 600 ticks: no NaNs');
+  ok(minY >= C.FH / 2 - 1e-6 && maxY <= C.AH - C.FH / 2 + 1e-6,
+    `flip spam never tunnels through a surface (y ${minY.toFixed(2)}..${maxY.toFixed(2)})`);
+  ok(maxY - minY < 4, `every-tick flips oscillate in place — the hover tech (span ${(maxY - minY).toFixed(2)}u)`);
+}
+{
+  // hovering over the fire on chained flips is legal — and survives
+  const g = fightReady();
+  const f0 = g.fighters[0];
+  f0.x = 12.5; f0.y = 6; f0.vy = 0; f0.grounded = false; // dropped over the crack
+  const fl = I(); fl.flip = true;
+  for (let k = 0; k < 300; k++) SIM.step(g, [fl, I()]);
+  ok(g.fighters[0].state !== 'ko' && g.screen === 'fight',
+    'chained flips hover a fighter safely above the pit');
 }
 {
   // mid-air flip is allowed
@@ -230,16 +256,40 @@ function run(g, n, i0, i1) {
   ok(f0.g === -1, 'flip usable mid-air');
 }
 {
-  // the platform is double-sided: a flipping fighter aligned with it lands on its underside
+  // the platforms are double-sided: a flipping fighter aligned with one is
+  // caught by its underside
   const g = fightReady();
   const f0 = g.fighters[0];
-  f0.x = 8; // dead centre, under the platform
+  f0.x = 8; // under the wide low step
   const fl = I(); fl.flip = true;
   run(g, 1, () => fl, null);
   let frames = 0;
   while (!f0.grounded && frames < 300) { SIM.step(g, [I(), I()]); frames++; }
-  approx(f0.y, C.PLAT.y0 - C.FH / 2, 1e-6, 'caught by the platform underside mid-flip');
+  approx(f0.y, C.PLATS[1].y0 - C.FH / 2, 1e-6, 'caught by the low step\'s underside mid-flip');
   ok(f0.g === -1 && f0.grounded, 'standing (inverted) on the platform');
+}
+{
+  // BOTH platforms collide on BOTH faces
+  const clearX = [10.0, 3.0]; // columns where ONLY that platform is in the way
+  for (let pi = 0; pi < C.PLATS.length; pi++) {
+    const p = C.PLATS[pi];
+    const cx = clearX[pi];
+    // top face: gravity-down fighter dropped above rests on top
+    let g = fightReady();
+    let f = g.fighters[0];
+    f.x = cx; f.y = p.y1 + 3; f.vy = 0; f.g = 1; f.grounded = false;
+    for (let k = 0; k < 120 && !f.grounded; k++) SIM.step(g, [I(), I()]);
+    approx(f.y, p.y1 + C.FH / 2, 1e-6, `platform ${pi}: grav-down fighter rests on the top face`);
+    // bottom face: gravity-up fighter released below rests on the underside
+    g = fightReady();
+    f = g.fighters[0];
+    f.x = cx; f.y = Math.max(C.FH / 2, p.y0 - 3); f.vy = 0; f.g = -1; f.grounded = false;
+    for (let k = 0; k < 120 && !f.grounded; k++) SIM.step(g, [I(), I()]);
+    approx(f.y, p.y0 - C.FH / 2, 1e-6, `platform ${pi}: grav-up fighter rests on the underside`);
+  }
+  // and the step gap is jumpable: low top -> high top
+  ok(C.PLATS[0].y1 - C.PLATS[1].y1 < 2.5, 'high step is reachable by jumping from the low step');
+  ok(C.PLATS[1].x1 > C.PLATS[0].x0, 'the two steps overlap mid-field');
 }
 
 // ---------------- KO / round / match flow ----------------
@@ -297,6 +347,99 @@ function run(g, n, i0, i1) {
   ok(g.fighters[0].mf === mfBefore, 'attacker move frames frozen during hitstop');
 }
 
+// ---------------- the fire pit ----------------
+{
+  // walking in = instant loss of the round
+  const g = fightReady();
+  const f0 = g.fighters[0];
+  f0.x = 10.6; f0.y = C.FH / 2; f0.g = 1; f0.grounded = true;
+  const mv = I(); mv.mx = 1;
+  let evs = [];
+  for (let k = 0; k < 300 && g.screen === 'fight'; k++) evs = evs.concat(SIM.step(g, [mv, I()]));
+  ok(evs.some(e => e.type === 'pitdeath' && e.victim === 0), 'walking into the crack: pitdeath fires');
+  ok(g.screen === 'roundend' && g.roundWinner === 1 && g.wins[1] === 1, 'round awarded to the survivor');
+  ok(g.roundEndCause === 'pit', 'round end cause recorded as pit');
+  ok(f0.state === 'ko' && f0.pitDead, 'victim marked pit-dead');
+  run(g, C.ROUNDEND_F + 2);
+  ok(g.screen === 'intro' && g.roundNum === 1, 'next round follows a pit death normally');
+}
+{
+  // the ceiling has no pit: walking the same span up there is safe
+  const g = fightReady();
+  const f1 = g.fighters[1]; // ceiling fighter
+  f1.x = 10.6;
+  const mv = I(); mv.mx = 1;
+  run(g, 300, null, () => mv);
+  ok(f1.state !== 'ko' && f1.grounded && g.screen === 'fight', 'ceiling is whole — the asymmetry');
+}
+{
+  // knocked in: a heavy on a grounded victim near the edge carries them in
+  const g = fightReady();
+  const [f0, f1] = g.fighters;
+  f0.x = 7.8; f0.g = 1; f0.y = C.FH / 2; f0.facing = 1; f0.grounded = true;
+  f1.x = 10.0; f1.g = 1; f1.y = C.FH / 2; f1.facing = -1; f1.grounded = true;
+  const h = I(); h.heavy = true;
+  let first = true, evs = [];
+  for (let k = 0; k < 240 && g.screen === 'fight'; k++) {
+    evs = evs.concat(SIM.step(g, [first ? h : I(), I()]));
+    first = false;
+  }
+  ok(evs.some(e => e.type === 'hit'), 'the edge heavy connects');
+  ok(evs.some(e => e.type === 'pitdeath' && e.victim === 1), 'knockback carries the victim into the fire');
+  ok(g.roundEndCause === 'pit' && g.roundWinner === 0, 'knockback pit kill credits the attacker');
+}
+
+// ---------------- airborne knockback ----------------
+{
+  // raw multiplier: identical heavy, grounded vs airborne victim
+  const hitVx = (airborne) => {
+    const g = fightReady();
+    const [f0, f1] = g.fighters;
+    f0.x = 4.0; f0.facing = 1; f0.g = 1; f0.y = C.FH / 2; f0.grounded = true;
+    f1.g = 1;
+    let vx = null;
+    const h = I(); h.heavy = true;
+    let first = true;
+    for (let k = 0; k < 60 && vx === null; k++) {
+      f1.x = 6.2; f1.facing = -1;
+      if (airborne) { f1.y = C.FH / 2 + 1.2; f1.vy = 0; f1.grounded = false; }
+      else { f1.y = C.FH / 2; f1.vy = 0; f1.grounded = true; }
+      SIM.step(g, [first ? h : I(), I()]);
+      first = false;
+      if (g.events.some(e => e.type === 'hit')) vx = g.fighters[1].vx;
+    }
+    return vx;
+  };
+  const vg = hitVx(false), va = hitVx(true);
+  approx(vg, C.KB_HEAVY.vx, 1e-9, 'grounded victim: knockback velocity unchanged');
+  approx(va, C.KB_HEAVY.vx * C.KB_AIR, 1e-9, `airborne victim: ${C.KB_AIR}x horizontal knockback`);
+  ok(C.KB_HEAVY.vx * C.KB_AIR > C.KB_QUICK.vx * C.KB_AIR, 'heavy still out-launches quick in the air');
+}
+{
+  // tuned danger zones: a midair heavy is deadly NEAR the pit, but from
+  // mid-arena (x=8) the victim lands just short — dangerous, not guaranteed
+  const launch = (vx0) => {
+    const g = fightReady();
+    const [f0, f1] = g.fighters;
+    f0.x = vx0 - 2.2; f0.facing = 1; f0.g = 1; f0.y = C.FH / 2; f0.grounded = true;
+    f1.g = 1;
+    let hit = false, died = false;
+    const h = I(); h.heavy = true;
+    let first = true;
+    for (let k = 0; k < 240 && g.screen === 'fight'; k++) {
+      if (!hit) { f1.x = vx0; f1.y = C.FH / 2 + 1.2; f1.vx = 0; f1.vy = 0; f1.grounded = false; f1.facing = -1; }
+      SIM.step(g, [first ? h : I(), I()]);
+      first = false;
+      if (g.events.some(e => e.type === 'hit')) hit = true;
+      if (g.events.some(e => e.type === 'pitdeath' && e.victim === 1)) died = true;
+    }
+    return { hit, died };
+  };
+  const mid = launch(8.0), near = launch(9.5);
+  ok(mid.hit && !mid.died, 'midair heavy from mid-arena (x=8.0): lands short of the fire');
+  ok(near.hit && near.died, 'midair heavy near the pit (x=9.5): straight in');
+}
+
 // ---------------- long soak: no NaN, nobody escapes the box ----------------
 {
   const g = fightReady();
@@ -317,7 +460,7 @@ function run(g, n, i0, i1) {
     if (g.screen === 'over') SIM.resetMatch(g);
     for (const f of g.fighters) {
       if (!Number.isFinite(f.x) || !Number.isFinite(f.y) || !Number.isFinite(f.vx) || !Number.isFinite(f.vy)) sane = false;
-      if (f.x < -1 || f.x > C.AW + 1 || f.y < -1 || f.y > C.AH + 1) sane = false;
+      if (f.x < -1 || f.x > C.AW + 1 || f.y < C.SINK_Y - 0.1 || f.y > C.AH + 1) sane = false;
       if (!Number.isFinite(f.hp) || f.hp < 0 || f.hp > C.HP) sane = false;
     }
     if (!sane) { console.log('  broke at tick ' + k); break; }

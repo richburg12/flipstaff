@@ -122,6 +122,20 @@ function boot(search, w, h) {
   g.touchDown(10, W / 2, H / 2); g.touchUp(10);
   ok(g.game.screen === 'intro' && g.game.wins[0] === 0, 'tap after match over starts a rematch');
   g.render();
+
+  // pit-death pass: drop the top fighter into the fire and render the
+  // ember burst + INTO THE FIRE banner
+  g.step(C.INTRO_F + 2);
+  const f1p = g.game.fighters[1];
+  f1p.g = 1; f1p.x = 12.5; f1p.y = 6; f1p.vy = 0; f1p.grounded = false;
+  let sawPit = false;
+  for (let i = 0; i < 80 && !sawPit; i++) {
+    g.step(); g.render();
+    if (g.game.roundEndCause === 'pit') sawPit = true;
+  }
+  ok(sawPit && g.game.screen === 'roundend' && g.game.roundWinner === 0,
+    'pit death reaches roundend with cause=pit, renders clean');
+  for (let i = 0; i < 30; i++) { g.step(); g.render(); }
 }
 
 // ---------------- ?ai=1 solo mode ----------------
@@ -135,7 +149,9 @@ function boot(search, w, h) {
   ok(g.game.screen === 'fight', 'ai mode: fight starts');
   const x1 = g.game.fighters[1].x;
   let moved = false, hpDropped = false;
-  for (let i = 0; i < 60 * 30 && !(moved && g.game.screen !== 'fight'); i++) {
+  // run across multiple rounds: a rare early AI pit-mistake may end round 1
+  // before it ever swings, so don't stop at the first roundend
+  for (let i = 0; i < 60 * 60 && !(moved && hpDropped); i++) {
     g.step();
     if (i % 20 === 0) g.render();
     if (g.game.fighters[1].x !== x1 || g.game.fighters[1].g !== -1) moved = true;

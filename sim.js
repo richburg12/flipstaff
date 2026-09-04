@@ -22,19 +22,31 @@
     AH: 18, // floor-to-ceiling interior height
     FW: 0.9, // fighter hurtbox width
     FH: 2.0, // fighter hurtbox height
-    // Two double-sided platforms, staggered like steps and overlapping
-    // mid-field: the wide low one sits left (the safe side), the small high
-    // one centre-right. A jump (2.5u) links the low top to the high top.
+    // FAIRNESS LAW: both players view the arena rotated 180° from each other,
+    // so the whole layout is EXACTLY point-symmetric about the centre
+    // (AW/2, AH/2). Every platform's 180° reflection is also a platform,
+    // every pit's reflection is the other pit, spawns mirror. A test asserts
+    // this invariant — arena edits that break it fail the suite.
+    //
+    // Two 8u double-sided platforms, exact point-reflections of each other,
+    // staggered and overlapping mid-field.
     PLATS: [
-      { x0: 5.75, y0: 7.4, x1: 10.25, y1: 8.0 }, // high step, 4.5u
-      { x0: 1.5, y0: 5.2, x1: 9.5, y1: 5.8 }, // low step, 8u (half the field)
+      { x0: 1.5, y0: 5.2, x1: 9.5, y1: 5.8 }, // low shelf (near the floor)
+      { x0: 6.5, y0: 12.2, x1: 14.5, y1: 12.8 }, // its 180° twin (near the ceiling)
     ],
-    // The fire pit: a molten crack in the BOTTOM floor only, right of centre.
-    // Fall in = instant loss of the round. The ceiling is whole — flipping up
-    // is the escape, and fighting with floor gravity on that side is a risk.
-    PIT: { x0: 11.5, x1: 13.5 },
-    PIT_KILL_Y: -0.35, // feet below this inside the crack = gone
-    SINK_Y: -2.5, // bodies stop sinking here (hidden under the paper)
+    // Two fire pits, point-symmetric: a molten crack near the far end of EACH
+    // surface. Falling into either = instant loss of the round. The escape is
+    // always a flip to the OTHER surface (whose crack is on the opposite side).
+    PITS: [
+      { x0: 11.5, x1: 13.5, ceiling: false }, // burnt through the floor, right
+      { x0: 2.5, x1: 4.5, ceiling: true }, // burnt through the ceiling, left
+    ],
+    PIT_KILL: 0.35, // this far past the surface inside a crack = gone
+    SINK: 2.5, // bodies stop sinking this far beyond the paper (hidden)
+    // Spawn columns, one per side; the pair {SPAWN_X, AW - SPAWN_X} is used
+    // point-symmetrically: P1 at (x, floor) means P2 at (AW - x, ceiling).
+    // Both columns clear both cracks by a full unit.
+    SPAWN_X: 5.5,
 
     // movement (units per frame @60Hz)
     RUN: 0.13,
@@ -119,7 +131,7 @@
     // Each fighter starts on the surface nearest its OWN player's edge.
     // Fighter 0 = bottom player = floor; fighter 1 = top player = ceiling.
     var left = (roundNum % 2 === 0) === (f.i === 0);
-    f.x = left ? C.AW * 0.25 : C.AW * 0.645; // right spawn stays clear of the pit
+    f.x = left ? C.SPAWN_X : C.AW - C.SPAWN_X; // point-symmetric pair
     f.g = f.i === 0 ? 1 : -1;
     f.y = f.i === 0 ? C.FH / 2 : C.AH - C.FH / 2;
     f.vx = 0; f.vy = 0;
@@ -131,9 +143,14 @@
     f.facing = f.x < C.AW / 2 ? 1 : -1;
   }
 
-  // ---------- physics: move-and-correct vs the closed box + platforms + pit ----------
-  function overPit(x) {
-    return x > C.PIT.x0 && x < C.PIT.x1; // support is lost when the CENTRE crosses
+  // ---------- physics: move-and-correct vs the closed box + platforms + pits ----------
+  // Support is lost when the body's CENTRE crosses a crack in that surface.
+  function pitAtX(x, ceiling) {
+    for (var i = 0; i < C.PITS.length; i++) {
+      var p = C.PITS[i];
+      if (p.ceiling === ceiling && x > p.x0 && x < p.x1) return true;
+    }
+    return false;
   }
 
   function physics(f) {
@@ -155,11 +172,11 @@
 
     // y axis
     f.y += f.vy;
-    if (f.y - hh < 0 && !overPit(f.x)) { // floor — unless the crack yawns below
+    if (f.y - hh < 0 && !pitAtX(f.x, false)) { // floor — unless its crack yawns below
       f.y = hh; f.vy = 0;
       if (f.g === 1) f.grounded = true;
     }
-    if (f.y + hh > C.AH) { // ceiling — always whole
+    if (f.y + hh > C.AH && !pitAtX(f.x, true)) { // ceiling — unless its crack yawns above
       f.y = C.AH - hh; f.vy = 0;
       if (f.g === -1) f.grounded = true;
     }
@@ -177,8 +194,8 @@
     }
     // resting contact (vy == 0 exactly on a surface)
     if (!f.grounded && f.vy === 0) {
-      if (f.g === 1 && f.y - hh <= 1e-9 && !overPit(f.x)) f.grounded = true;
-      if (f.g === -1 && f.y + hh >= C.AH - 1e-9) f.grounded = true;
+      if (f.g === 1 && f.y - hh <= 1e-9 && !pitAtX(f.x, false)) f.grounded = true;
+      if (f.g === -1 && f.y + hh >= C.AH - 1e-9 && !pitAtX(f.x, true)) f.grounded = true;
       for (i = 0; i < C.PLATS.length && !f.grounded; i++) {
         p = C.PLATS[i];
         if (f.x + hw <= p.x0 || f.x - hw >= p.x1) continue;
@@ -186,8 +203,9 @@
         if (f.g === -1 && Math.abs(f.y + hh - p.y0) <= 1e-6) f.grounded = true;
       }
     }
-    // bodies that fell into the crack stop sinking just under the paper
-    if (f.y < C.SINK_Y) { f.y = C.SINK_Y; f.vy = 0; }
+    // bodies that fell into a crack stop sinking just beyond the paper
+    if (f.y < -C.SINK) { f.y = -C.SINK; f.vy = 0; }
+    if (f.y > C.AH + C.SINK) { f.y = C.AH + C.SINK; f.vy = 0; }
     if (f.grounded) f.coyote = C.COYOTE;
     else if (f.coyote > 0) f.coyote--;
   }
@@ -435,10 +453,14 @@
     game.events = [];
   }
 
-  // Fell into the fire: instant loss of the round, however you got there —
-  // walked in, knocked in, or flipped down carelessly.
+  // Fell into a fire: instant loss of the round, however you got there —
+  // walked in, knocked in, or flipped into it carelessly. Both cracks burn:
+  // past the floor going down, or past the ceiling going up.
   function checkPit(game, f) {
-    if (f.state === 'ko' || f.y - C.FH / 2 >= C.PIT_KILL_Y) return;
+    if (f.state === 'ko') return;
+    var inFloorPit = f.y - C.FH / 2 < -C.PIT_KILL;
+    var inCeilPit = f.y + C.FH / 2 > C.AH + C.PIT_KILL;
+    if (!inFloorPit && !inCeilPit) return;
     f.state = 'ko';
     f.koT = 0;
     f.hp = 0;
@@ -446,7 +468,13 @@
     f.move = null;
     f.blockF = 0;
     f.pitDead = true;
-    game.events.push({ type: 'pitdeath', x: f.x, y: 0.4, victim: f.i });
+    game.events.push({
+      type: 'pitdeath',
+      x: f.x,
+      y: inCeilPit ? C.AH - 0.4 : 0.4,
+      ceiling: inCeilPit,
+      victim: f.i,
+    });
     if (game.screen === 'fight') {
       var w = 1 - f.i;
       game.wins[w]++;
@@ -550,57 +578,87 @@
   }
 
   // Arena sense, applied to the finished InputFrame — the AI stays honest
-  // (only its own inputs are adjusted, like a careful thumb): it does not
-  // stroll into the fire, does not flip down onto it, and uses the designed
-  // escape (flip up) when falling toward it. A rare authentic blunder stays.
+  // (only its own inputs are adjusted, like a careful thumb). Fully symmetric:
+  // whichever way its gravity points, it treats the crack in THAT surface as
+  // its own hazard — never strolls in, escapes by flipping to the other
+  // surface when drifting over it, and never flips into the far crack either.
+  // A rare authentic blunder stays.
   function aiGuard(game, ai, inp) {
     var me = game.fighters[1];
     var r = ai.rng;
-    var overCrack = me.x > C.PIT.x0 - 0.35 && me.x < C.PIT.x1 + 0.35;
-    if (me.g === 1) {
-      // falling toward the crack: flip up — the escape the arena teaches
-      if (!me.grounded && overCrack && me.vy <= 0 && me.hitstun === 0 &&
-          me.move === null && me.y < 7 && r() > 0.06) {
+    // the crack in the surface my gravity pulls me toward
+    var pit = null;
+    for (var i = 0; i < C.PITS.length; i++) {
+      if (C.PITS[i].ceiling === (me.g === -1)) pit = C.PITS[i];
+    }
+    var overCrack = me.x > pit.x0 - 0.35 && me.x < pit.x1 + 0.35;
+    var fallingIn = me.g === 1 ? me.vy <= 0 : me.vy >= 0; // toward my surface
+    var roomToFlip = me.g === 1 ? me.y < 7 : me.y > C.AH - 7;
+    if (!me.grounded && overCrack) {
+      // drifting over my crack: flip to the other surface — THE escape
+      if (fallingIn && me.hitstun === 0 && me.move === null && roomToFlip && r() > 0.06) {
         inp.flip = true;
       }
-      // steer off the crack while airborne above it
-      if (!me.grounded && overCrack) inp.mx = me.x < (C.PIT.x0 + C.PIT.x1) / 2 ? -1 : 1;
-      // never walk in (except the rare genuine mistake); when the way across
-      // is barred, sometimes take the high road instead — flip to the ceiling
-      if (me.grounded && r() > 0.012) {
-        if (inp.mx > 0 && me.x < C.PIT.x1 && me.x > C.PIT.x0 - 1.3) {
-          inp.mx = 0;
-          if (r() < 0.04) inp.flip = true;
-        }
-        if (inp.mx < 0 && me.x > C.PIT.x0 && me.x < C.PIT.x1 + 1.3) {
-          inp.mx = 0;
-          if (r() < 0.04) inp.flip = true;
-        }
-      }
-    } else if (inp.flip && overCrack && r() > 0.02) {
-      // don't flip DOWN into the fire from above it
-      inp.flip = false;
+      // and steer off it
+      inp.mx = me.x < (pit.x0 + pit.x1) / 2 ? -1 : 1;
     }
+    // never walk in (except the rare genuine mistake); when the way across
+    // is barred, sometimes take the other surface instead
+    if (me.grounded && r() > 0.012) {
+      if (inp.mx > 0 && me.x < pit.x1 && me.x > pit.x0 - 1.3) {
+        inp.mx = 0;
+        if (r() < 0.04) inp.flip = true;
+      }
+      if (inp.mx < 0 && me.x > pit.x0 && me.x < pit.x1 + 1.3) {
+        inp.mx = 0;
+        if (r() < 0.04) inp.flip = true;
+      }
+    }
+    // don't LUNGE into my own crack: a heavy carries ~1.6u forward. Trade the
+    // suicidal heavy for a quick instead (short arc, tiny nudge).
+    if (inp.heavy && me.grounded && r() > 0.02) {
+      var lunge = 1.9;
+      var overshoot = me.facing > 0
+        ? me.x < pit.x1 && me.x + lunge > pit.x0
+        : me.x > pit.x0 && me.x - lunge < pit.x1;
+      if (overshoot) { inp.heavy = false; inp.quick = true; }
+    }
+    // and never FLIP into the crack on the far surface
+    if (inp.flip && flipLanding(me).deadly && r() > 0.02) inp.flip = false;
   }
 
-  // Where would a flip from here land me? (surface y for my feet, or the fire)
+  // Where would a flip from here land me? (surface y for my feet — or a fire)
   function flipLanding(me) {
     var gNew = -me.g;
-    var res = { y: gNew === 1 ? C.FH / 2 : C.AH - C.FH / 2, plat: -1 };
-    if (gNew === 1 && me.x > C.PIT.x0 && me.x < C.PIT.x1) res.y = -99;
+    var res = { y: gNew === 1 ? C.FH / 2 : C.AH - C.FH / 2, plat: -1, deadly: false };
+    var caught = false;
     for (var i = 0; i < C.PLATS.length; i++) {
       var p = C.PLATS[i];
       if (me.x <= p.x0 || me.x >= p.x1) continue;
       if (gNew === 1) {
         var top = p.y1 + C.FH / 2;
-        if (top <= me.y + 1e-6 && (res.y === -99 || top > res.y)) { res.y = top; res.plat = i; }
+        if (top <= me.y + 1e-6 && (!caught || top > res.y)) { res.y = top; res.plat = i; caught = true; }
       } else {
         var bot = p.y0 - C.FH / 2;
-        if (bot >= me.y - 1e-6 && bot < res.y) { res.y = bot; res.plat = i; }
+        if (bot >= me.y - 1e-6 && (!caught || bot < res.y)) { res.y = bot; res.plat = i; caught = true; }
       }
     }
+    // nothing catches me: I sail all the way to the far surface — or its crack
+    if (!caught && pitAtX(me.x, gNew === -1)) res.deadly = true;
     return res;
   }
+  // Is there a crack in `ceiling`'s surface between columns x0 and x1
+  // (with a safety margin)? Landing beyond it would strand me from the foe.
+  function crackBetween(xa, xb, ceiling) {
+    var lo = Math.min(xa, xb), hi = Math.max(xa, xb);
+    for (var i = 0; i < C.PITS.length; i++) {
+      var p = C.PITS[i];
+      if (p.ceiling !== ceiling) continue;
+      if (lo < p.x1 + 0.6 && hi > p.x0 - 0.6) return true;
+    }
+    return false;
+  }
+
   // Index of the platform I'm currently standing on (either face), or -1.
   function platUnderfoot(me) {
     for (var i = 0; i < C.PLATS.length; i++) {
@@ -668,26 +726,34 @@
         ai.mx = r() < 0.5 ? 0 : (r() < 0.5 ? 1 : -1);
         ai.moveT = 20;
       } else if (!engaged) {
-        // foe is on another surface: line up and flip over to them — unless a
-        // shelf blocks the route, in which case walk off its edge first
+        // Foe is on another level. Route toward them hop by hop: flip when it
+        // brings me meaningfully closer to their altitude AND doesn't strand
+        // me across a crack; otherwise walk off whatever shelf is in the way,
+        // exiting toward the foe's side of it.
         var land = flipLanding(me);
-        var reach = land.y > -50 && Math.abs(land.y - seen.y) < 2.6;
+        var vNow = Math.abs(me.y - seen.y);
+        var vAfter = Math.abs(land.y - seen.y);
+        var stranded = land.plat < 0 && crackBetween(me.x, seen.x, -me.g === -1);
+        var improves = !land.deadly && !stranded && vAfter < vNow - 1.5;
         var shelf = platUnderfoot(me);
-        if (reach && (adx < 2.4 ? r() < 0.55 : adx < 5 && r() < 0.3)) {
-          inp.flip = true; // lined up (or close enough): drop in on them
-        } else if (!reach && (shelf >= 0 || land.plat >= 0)) {
+        if (improves && (adx < 2.4 ? r() < 0.55 : adx < 5 && r() < 0.3)) {
+          inp.flip = true; // drop in on them
+        } else if (!improves && (shelf >= 0 || land.plat >= 0)) {
           var bp = C.PLATS[shelf >= 0 ? shelf : land.plat];
-          ai.mx = me.x - bp.x0 < bp.x1 - me.x ? -1 : 1;
+          if (seen.x < bp.x0) ai.mx = -1; // foe is out past this edge
+          else if (seen.x > bp.x1) ai.mx = 1;
+          else ai.mx = me.x - bp.x0 < bp.x1 - me.x ? -1 : 1; // foe below/above: nearest
           ai.moveT = 30;
         } else {
           ai.mx = toward; ai.moveT = 26;
         }
-        if (r() < 0.06 && reach) inp.flip = true; // the occasional stylish flip
+        if (r() < 0.06 && improves) inp.flip = true; // the occasional stylish flip
       } else if (adx < 2.0) {
         // in range: mostly quick, sometimes heavy, sometimes turtle or step
-        // out. When hits would carry the foe toward the fire (foe on floor
-        // gravity, to our right), lean mildly into the launchier options.
-        var pitPush = toward > 0 && seen.g === 1;
+        // out. When hits would carry the foe toward the crack in THEIR
+        // surface (floor crack is right, ceiling crack is left), lean mildly
+        // into the launchier options.
+        var pitPush = seen.g === 1 ? toward > 0 : toward < 0;
         var a2 = r();
         if (a2 < 0.48) inp.quick = true;
         else if (a2 < (pitPush ? 0.7 : 0.62)) inp.heavy = true;
@@ -696,7 +762,7 @@
         // else stand and watch (human-ish)
       } else if (adx < 3.0) {
         // spacing band: poke heavy occasionally (this is where it whiffs)
-        if (r() < (toward > 0 && seen.g === 1 ? 0.3 : 0.22)) inp.heavy = true;
+        if (r() < ((seen.g === 1 ? toward > 0 : toward < 0) ? 0.3 : 0.22)) inp.heavy = true;
         else { ai.mx = toward; ai.moveT = 22; }
         if (r() < 0.07) inp.jump = true;
       } else {
@@ -719,6 +785,7 @@
     step: step,
     createAI: createAI,
     aiInput: aiInput,
+    spawn: spawn, // exposed so the symmetry test can inspect spawn placement
     activeHitbox: activeHitbox,
     upSign: upSign,
   };

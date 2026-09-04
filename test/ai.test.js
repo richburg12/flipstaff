@@ -90,11 +90,14 @@ function ok(cond, msg) {
       else if (Math.abs(dx) > 1.7) i0.mx = Math.sign(dx);
       else if (cd <= 0 && me.move === null) { i0.quick = true; cd = 16; }
       cd--;
-      // pit sense: stop at the crack; flip out if falling toward it
-      if (me.g === 1) {
-        if (me.grounded && i0.mx > 0 && me.x > C.PIT.x0 - 1.2 && me.x < C.PIT.x1) i0.mx = 0;
-        if (me.grounded && i0.mx < 0 && me.x > C.PIT.x0 && me.x < C.PIT.x1 + 1.2) i0.mx = 0;
-        if (!me.grounded && me.x > C.PIT.x0 && me.x < C.PIT.x1 && me.vy <= 0) { i0.flip = true; lastFlip = ticks; }
+      // pit sense (both cracks): stop at the crack in MY surface; flip out
+      // if drifting into it
+      const myPit = me.g === 1 ? C.PITS[0] : C.PITS[1];
+      if (me.grounded) {
+        if (i0.mx > 0 && me.x > myPit.x0 - 1.2 && me.x < myPit.x1) i0.mx = 0;
+        if (i0.mx < 0 && me.x > myPit.x0 && me.x < myPit.x1 + 1.2) i0.mx = 0;
+      } else if (me.x > myPit.x0 && me.x < myPit.x1 && (me.g === 1 ? me.vy <= 0 : me.vy >= 0)) {
+        i0.flip = true; lastFlip = ticks;
       }
     }
     SIM.step(g, [i0, SIM.aiInput(g, ai)]);
@@ -121,24 +124,60 @@ function ok(cond, msg) {
     SIM.step(g, [SIM.emptyInput(), SIM.aiInput(g, ai)]);
     if (g.events.some(e => e.type === 'pitdeath' && e.victim === 1)) died = true;
   }
-  ok(!died, 'AI baited across the pit: refuses to walk into the crack');
-  ok(f1.x < C.PIT.x0 + 0.1 || f1.g === -1, 'AI held the edge (or took the ceiling route)');
+  ok(!died, 'AI baited across the floor crack: refuses to walk in');
+  ok(f1.x < C.PITS[0].x0 + 0.1 || f1.g === -1, 'AI held the edge (or took the ceiling route)');
 }
 {
-  // AI directly above the fire on the ceiling: it does not flip down into it
+  // MIRROR: AI on ceiling gravity, baited leftward across the CEILING crack
   const g = SIM.createGame();
   while (g.screen === 'intro') SIM.step(g, [SIM.emptyInput(), SIM.emptyInput()]);
-  const ai = SIM.createAI(11);
+  const ai = SIM.createAI(13);
   ai.rng = () => 0.5;
   const [f0, f1] = g.fighters;
-  f1.g = -1; f1.y = C.AH - C.FH / 2; f1.x = 12.5; f1.grounded = true; // parked over the crack
-  f0.g = 1; f0.y = C.FH / 2; f0.x = 10.0; f0.grounded = true;
+  f1.g = -1; f1.y = C.AH - C.FH / 2; f1.x = 5.6; f1.grounded = true; // on the ceiling, right of its crack
+  f0.g = 1; f0.y = C.FH / 2; f0.x = 1.4; f0.grounded = true; // bait beyond it, down on the floor
   let died = false;
   for (let k = 0; k < 900 && g.screen === 'fight'; k++) {
     SIM.step(g, [SIM.emptyInput(), SIM.aiInput(g, ai)]);
     if (g.events.some(e => e.type === 'pitdeath' && e.victim === 1)) died = true;
   }
-  ok(!died, 'AI over the pit on the ceiling: never flips down into the fire');
+  ok(!died, 'AI baited across the ceiling crack: refuses to walk in');
+}
+{
+  // AI standing where a flip would sail into the far surface's crack — the
+  // low shelf's top sits directly under the ceiling crack — must not flip up
+  const g = SIM.createGame();
+  while (g.screen === 'intro') SIM.step(g, [SIM.emptyInput(), SIM.emptyInput()]);
+  const ai = SIM.createAI(11);
+  ai.rng = () => 0.5;
+  const [f0, f1] = g.fighters;
+  f1.g = 1; f1.x = 3.5; f1.y = C.PLATS[0].y1 + C.FH / 2; f1.grounded = true; // on the low shelf, under the ceiling crack
+  f0.g = 1; f0.y = C.FH / 2; f0.x = 14.0; f0.grounded = true;
+  let died = false;
+  for (let k = 0; k < 900 && g.screen === 'fight'; k++) {
+    SIM.step(g, [SIM.emptyInput(), SIM.aiInput(g, ai)]);
+    if (g.events.some(e => e.type === 'pitdeath' && e.victim === 1)) died = true;
+  }
+  ok(!died, 'AI never flips UP into the ceiling crack from the shelf beneath it');
+}
+{
+  // AI drifting airborne over its own crack flips to the other surface —
+  // both gravities
+  for (const [gsign, x, y, name] of [[1, 12.5, 6, 'floor'], [-1, 3.5, C.AH - 6, 'ceiling']]) {
+    const g = SIM.createGame();
+    while (g.screen === 'intro') SIM.step(g, [SIM.emptyInput(), SIM.emptyInput()]);
+    const ai = SIM.createAI(17);
+    ai.rng = () => 0.5;
+    const f1 = g.fighters[1];
+    f1.g = gsign; f1.x = x; f1.y = y; f1.vy = 0; f1.grounded = false; // dropped over the crack
+    let died = false, escaped = false;
+    for (let k = 0; k < 240 && g.screen === 'fight'; k++) {
+      SIM.step(g, [SIM.emptyInput(), SIM.aiInput(g, ai)]);
+      if (g.events.some(e => e.type === 'pitdeath' && e.victim === 1)) died = true;
+      if (f1.g === -gsign) escaped = true;
+    }
+    ok(!died && escaped, `AI dropped over the ${name} crack: flips to the other surface to escape`);
+  }
 }
 
 process.exit(failed);

@@ -10,8 +10,10 @@ standing upright from your seat — and the classic "upside-down fighter"
 problem becomes the mechanic: the FLIP button inverts your gravity only,
 momentum carries, and you somersault across to land feet-first on the far
 surface. Two double-sided platforms float mid-arena, staggered like steps,
-to catch you. A molten crack in the right floor is instant death — the
-ceiling is whole, so flipping up is always the escape.
+to catch you. A molten crack burns near the far end of EACH surface —
+instant death; the escape is flipping to the other surface, whose crack is
+on the opposite side. The whole arena is exactly 180°-rotationally
+symmetric, so the layout is identical from both seats (a test enforces it).
 
 ## Controls (per player, at their own edge)
 

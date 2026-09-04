@@ -128,29 +128,34 @@ function prerenderBg() {
     b.strokeStyle = 'rgba(34,28,38,0.25)'; b.lineWidth = Math.max(6, ar.s * 0.34);
     b.beginPath(); b.moveTo(px(wx0 + (wx1 - wx0) * 0.06), yy); b.lineTo(px(wx1 - (wx1 - wx0) * 0.06), yy); b.stroke();
   };
-  strokeSeg(py(C.AH), 0, C.AW, false); // ceiling: whole
-  strokeSeg(py(0), 0, C.PIT.x0, true); // floor left of the crack
-  strokeSeg(py(0), C.PIT.x1, C.AW, true); // floor right of the crack
+  // each surface's stroke breaks at ITS fire crack — the paper is burnt through
+  const floorPit = C.PITS.find(q => !q.ceiling), ceilPit = C.PITS.find(q => q.ceiling);
+  strokeSeg(py(0), 0, floorPit.x0, true);
+  strokeSeg(py(0), floorPit.x1, C.AW, true);
+  strokeSeg(py(C.AH), 0, ceilPit.x0, true);
+  strokeSeg(py(C.AH), ceilPit.x1, C.AW, true);
 
-  // the fire pit: charred, curling paper edges around a gap of darkness
-  // (the animated lava glow + embers are drawn per-frame in render())
-  {
-    const gx0 = px(C.PIT.x0), gx1 = px(C.PIT.x1), gy = py(0);
-    const ch = b.createLinearGradient(0, gy, 0, gy - ar.s * 1.1);
+  // the fire cracks: charred, curling paper edges around gaps of darkness
+  // (the animated lava glow + embers are drawn per-frame in render()).
+  // `s` flips the char inward from whichever surface the crack burns through.
+  for (const pit of C.PITS) {
+    const gx0 = px(pit.x0), gx1 = px(pit.x1), gy = py(pit.ceiling ? C.AH : 0);
+    const s = pit.ceiling ? 1 : -1; // pixel-y direction pointing INTO the arena
+    const ch = b.createLinearGradient(0, gy, 0, gy + s * ar.s * 1.1);
     ch.addColorStop(0, 'rgba(30,14,8,0.85)');
     ch.addColorStop(0.45, 'rgba(70,32,14,0.35)');
     ch.addColorStop(1, 'rgba(70,32,14,0)');
     b.fillStyle = ch;
-    b.fillRect(gx0 - ar.s * 0.35, gy - ar.s * 1.1, (gx1 - gx0) + ar.s * 0.7, ar.s * 1.1);
-    // jagged burnt rim, curling up at both lips
+    b.fillRect(gx0 - ar.s * 0.35, Math.min(gy, gy + s * ar.s * 1.1), (gx1 - gx0) + ar.s * 0.7, ar.s * 1.1);
+    // jagged burnt rim, curling inward at both lips
     b.strokeStyle = '#1c0e07'; b.lineWidth = Math.max(2.5, ar.s * 0.13); b.lineCap = 'round';
     b.beginPath();
     b.moveTo(gx0 - ar.s * 0.35, gy);
-    b.quadraticCurveTo(gx0 - ar.s * 0.05, gy - ar.s * 0.05, gx0 + ar.s * 0.06, gy - ar.s * 0.3);
+    b.quadraticCurveTo(gx0 - ar.s * 0.05, gy + s * ar.s * 0.05, gx0 + ar.s * 0.06, gy + s * ar.s * 0.3);
     b.stroke();
     b.beginPath();
     b.moveTo(gx1 + ar.s * 0.35, gy);
-    b.quadraticCurveTo(gx1 + ar.s * 0.05, gy - ar.s * 0.05, gx1 - ar.s * 0.06, gy - ar.s * 0.3);
+    b.quadraticCurveTo(gx1 + ar.s * 0.05, gy + s * ar.s * 0.05, gx1 - ar.s * 0.06, gy + s * ar.s * 0.3);
     b.stroke();
   }
 
@@ -398,10 +403,11 @@ function stepSim() {
       shell.flash = 8;
       sfx.ko();
     } else if (e.type === 'pitdeath') {
-      // swallowed by the crack: a column of embers, a flash, a sizzle-gong
-      fireBurst(e.x, 0.3, 46);
-      inkBurst(e.x, 0.6, 14, INK, 0.22);
-      shell.rings.push({ x: e.x, y: 0.4, r: 0.3, life: 24, max: 24 });
+      // swallowed by a crack: a column of embers, a flash, a sizzle-gong
+      const dir = e.ceiling ? -1 : 1;
+      fireBurst(e.x, e.y - dir * 0.1, 46, dir);
+      inkBurst(e.x, e.y + dir * 0.2, 14, INK, 0.22);
+      shell.rings.push({ x: e.x, y: e.y, r: 0.3, life: 24, max: 24 });
       shell.shake = 14;
       shell.flash = 8;
       sfx.pit();
@@ -444,23 +450,29 @@ function inkBurst(x, y, n, col, speed) {
   }
 }
 const EMBER_COLS = ['#ffb02e', '#ff7a2e', '#e04a1c', '#ffd77a'];
-function fireBurst(x, y, n) {
+// dir: +1 = embers rise (floor crack), -1 = embers sink (ceiling crack)
+function fireBurst(x, y, n, dir) {
+  const d = dir || 1;
   for (let i = 0; i < n; i++) {
     shell.particles.push({
-      x: x + (Math.random() - 0.5) * 0.8, y: y + Math.random() * 0.3,
-      vx: (Math.random() - 0.5) * 0.14, vy: 0.08 + Math.random() * 0.22,
+      x: x + (Math.random() - 0.5) * 0.8, y: y + d * Math.random() * 0.3,
+      vx: (Math.random() - 0.5) * 0.14, vy: d * (0.08 + Math.random() * 0.22),
       life: 24 + Math.random() * 30 | 0, size: 0.04 + Math.random() * 0.1,
       col: EMBER_COLS[(Math.random() * EMBER_COLS.length) | 0], ember: true,
     });
   }
 }
-// ambient embers drifting up out of the crack, every frame the panel is live
+// ambient embers drifting out of both cracks, every frame the panel is live —
+// rising from the floor crack, sinking from the ceiling one (so each reads as
+// fire licking "up" from its owner's point of view)
 function pitAmbient() {
-  if (Math.random() < 0.35) {
-    const p = C.PIT;
+  for (const p of C.PITS) {
+    if (Math.random() >= 0.35) continue;
     shell.particles.push({
-      x: p.x0 + 0.15 + Math.random() * (p.x1 - p.x0 - 0.3), y: 0.05,
-      vx: (Math.random() - 0.5) * 0.02, vy: 0.02 + Math.random() * 0.05,
+      x: p.x0 + 0.15 + Math.random() * (p.x1 - p.x0 - 0.3),
+      y: p.ceiling ? C.AH - 0.05 : 0.05,
+      vx: (Math.random() - 0.5) * 0.02,
+      vy: (p.ceiling ? -1 : 1) * (0.02 + Math.random() * 0.05),
       life: 36 + Math.random() * 44 | 0, size: 0.03 + Math.random() * 0.07,
       col: EMBER_COLS[(Math.random() * EMBER_COLS.length) | 0], ember: true,
     });
@@ -728,25 +740,30 @@ function drawFighter(f, i) {
 }
 
 // ---------- world-space fx ----------
-// The molten crack: flickering glow rising out of the burnt gap in the floor.
-// Orientation-neutral on purpose — it reads as fire from both seats.
+// The molten cracks: flickering glow pouring out of each burnt gap — up from
+// the floor crack, down from the ceiling one. Each is unmistakable from both
+// seats (from your own seat, your crack glows up out of your floor).
 function drawPitGlow() {
-  const p = C.PIT;
-  const gx0 = px(p.x0), gx1 = px(p.x1), gy = py(0);
-  const flick = 0.7 + 0.2 * Math.sin(shell.t * 0.11) + 0.1 * Math.sin(shell.t * 0.37 + 1.7);
-  const h = ar.s * 2.8;
-  const grad = ctx.createLinearGradient(0, gy, 0, gy - h);
-  grad.addColorStop(0, `rgba(255,122,40,${0.42 * flick})`);
-  grad.addColorStop(0.4, `rgba(255,150,60,${0.16 * flick})`);
-  grad.addColorStop(1, 'rgba(255,150,60,0)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(gx0 - ar.s * 0.4, gy - h, (gx1 - gx0) + ar.s * 0.8, h);
-  // molten core lines along the gap
-  ctx.fillStyle = `rgba(255,190,80,${0.45 + 0.35 * flick})`;
-  ctx.fillRect(gx0, gy - Math.max(2.5, ar.s * 0.12), gx1 - gx0, Math.max(2.5, ar.s * 0.12));
-  const wob = Math.sin(shell.t * 0.23) * 0.3;
-  ctx.fillStyle = `rgba(255,240,180,${0.35 * flick})`;
-  ctx.fillRect(gx0 + ar.s * (0.4 + wob), gy - Math.max(2, ar.s * 0.07), (gx1 - gx0) - ar.s * (0.8 + wob * 2), Math.max(2, ar.s * 0.07));
+  for (let i = 0; i < C.PITS.length; i++) {
+    const p = C.PITS[i];
+    const gx0 = px(p.x0), gx1 = px(p.x1), gy = py(p.ceiling ? C.AH : 0);
+    const s = p.ceiling ? 1 : -1; // pixel-y direction pointing INTO the arena
+    const flick = 0.7 + 0.2 * Math.sin(shell.t * 0.11 + i * 2.1) + 0.1 * Math.sin(shell.t * 0.37 + 1.7 + i);
+    const h = ar.s * 2.8;
+    const grad = ctx.createLinearGradient(0, gy, 0, gy + s * h);
+    grad.addColorStop(0, `rgba(255,122,40,${0.42 * flick})`);
+    grad.addColorStop(0.4, `rgba(255,150,60,${0.16 * flick})`);
+    grad.addColorStop(1, 'rgba(255,150,60,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(gx0 - ar.s * 0.4, Math.min(gy, gy + s * h), (gx1 - gx0) + ar.s * 0.8, h);
+    // molten core lines along the gap
+    const core = Math.max(2.5, ar.s * 0.12), core2 = Math.max(2, ar.s * 0.07);
+    ctx.fillStyle = `rgba(255,190,80,${0.45 + 0.35 * flick})`;
+    ctx.fillRect(gx0, Math.min(gy, gy + s * core), gx1 - gx0, core);
+    const wob = Math.sin(shell.t * 0.23 + i * 3) * 0.3;
+    ctx.fillStyle = `rgba(255,240,180,${0.35 * flick})`;
+    ctx.fillRect(gx0 + ar.s * (0.4 + wob), Math.min(gy, gy + s * core2), (gx1 - gx0) - ar.s * (0.8 + wob * 2), core2);
+  }
 }
 
 function drawTrails() {
@@ -1030,22 +1047,29 @@ function drawTitle() {
   ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.strokeRect(dx0, dy0, dw, dh);
   ctx.lineWidth = 2;
   ctx.strokeStyle = 'rgba(34,28,38,0.5)';
-  // the two staggered step platforms
-  ctx.strokeRect(dx0 + dw * 0.36, dy0 + dh * 0.42, dw * 0.28, dh * 0.06);
-  ctx.strokeRect(dx0 + dw * 0.1, dy0 + dh * 0.62, dw * 0.5, dh * 0.06);
-  // the fire pit: a glowing gap in the right floor
-  ctx.strokeStyle = PAPER_HI; ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(dx0 + dw * 0.72, dy0 + dh); ctx.lineTo(dx0 + dw * 0.85, dy0 + dh);
-  ctx.stroke();
-  ctx.fillStyle = '#e0621f';
-  ctx.beginPath();
-  ctx.moveTo(dx0 + dw * 0.725, dy0 + dh - 1);
-  ctx.lineTo(dx0 + dw * 0.765, dy0 + dh - 7 * u);
-  ctx.lineTo(dx0 + dw * 0.785, dy0 + dh - 3 * u);
-  ctx.lineTo(dx0 + dw * 0.81, dy0 + dh - 8 * u);
-  ctx.lineTo(dx0 + dw * 0.845, dy0 + dh - 1);
-  ctx.closePath(); ctx.fill();
+  // the two shelves — exact 180° rotations of each other (true to the sim)
+  ctx.strokeRect(dx0 + dw * 0.094, dy0 + dh * 0.665, dw * 0.5, dh * 0.055);
+  ctx.strokeRect(dx0 + dw * 0.406, dy0 + dh * 0.28, dw * 0.5, dh * 0.055);
+  // the fire cracks: one in each surface, point-symmetric about the centre
+  const crack = (fx0, fx1, top) => {
+    const yy = top ? dy0 : dy0 + dh;
+    const s = top ? 1 : -1; // flame direction into the box
+    ctx.strokeStyle = PAPER_HI; ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(dx0 + dw * fx0, yy); ctx.lineTo(dx0 + dw * fx1, yy);
+    ctx.stroke();
+    ctx.fillStyle = '#e0621f';
+    const w = fx1 - fx0;
+    ctx.beginPath();
+    ctx.moveTo(dx0 + dw * (fx0 + w * 0.04), yy + s);
+    ctx.lineTo(dx0 + dw * (fx0 + w * 0.33), yy + s * 7 * u);
+    ctx.lineTo(dx0 + dw * (fx0 + w * 0.5), yy + s * 3 * u);
+    ctx.lineTo(dx0 + dw * (fx0 + w * 0.68), yy + s * 8 * u);
+    ctx.lineTo(dx0 + dw * (fx0 + w * 0.96), yy + s);
+    ctx.closePath(); ctx.fill();
+  };
+  crack(11.5 / 16, 13.5 / 16, false); // floor crack, right
+  crack(2.5 / 16, 4.5 / 16, true); // ceiling crack, left — its exact mirror
   const mini = (x, yy, col, up) => {
     ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
     const s = up ? -1 : 1;
@@ -1064,12 +1088,14 @@ function drawTitle() {
   y = dy0 + dh + 16 * u;
   ctx.fillStyle = 'rgba(34,28,38,0.85)';
   ctx.font = `${12 * u}px ${FONT}`;
-  ctx.fillText('A closed box: floor AND ceiling are ground, plus two', cx, y); y += 14.5 * u;
-  ctx.fillText('stepped ledges. Your fighter stands upright on YOUR floor;', cx, y); y += 14.5 * u;
-  ctx.fillText('FLIP inverts your gravity — somersault across, land feet-first.', cx, y); y += 14.5 * u;
+  ctx.fillText('A closed box: floor AND ceiling are ground, plus two shelves.', cx, y); y += 14.5 * u;
+  ctx.fillText('Your fighter stands upright on YOUR floor; FLIP inverts your', cx, y); y += 14.5 * u;
+  ctx.fillText('gravity — somersault across, land feet-first. The arena is', cx, y); y += 14.5 * u;
+  ctx.fillText('identical for both of you: rotated half a turn, nothing changes.', cx, y); y += 14.5 * u;
   ctx.fillStyle = '#b3491c';
-  ctx.fillText('The molten crack in the right floor is INSTANT DEATH.', cx, y); y += 14.5 * u;
-  ctx.fillText('The ceiling is whole — flipping up is always the escape.', cx, y); y += 22 * u;
+  ctx.fillText('A molten crack burns near the far end of EACH surface:', cx, y); y += 14.5 * u;
+  ctx.fillText('INSTANT DEATH. The escape is flipping to the other surface —', cx, y); y += 14.5 * u;
+  ctx.fillText('its crack is on the opposite side.', cx, y); y += 22 * u;
 
   // controls
   const line = (head, body, col) => {

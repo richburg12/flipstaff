@@ -178,7 +178,7 @@ function run(g, n, i0, i1) {
   ok(f1.g === -1 && Math.abs(f1.y - (C.AH - C.FH / 2)) < 1e-6, 'f1 spawns standing on the ceiling (their own floor)');
 
   // flip f0: must arc across and land feet-first on the ceiling
-  f0.x = 10.9; // the clear column between the high step and the pit
+  f0.x = 15; // the clear column right of both shelves and both cracks
   const fl = I(); fl.flip = true;
   run(g, 1, () => fl, null);
   ok(f0.g === -1, 'flip inverts gravity for that fighter only');
@@ -265,12 +265,12 @@ function run(g, n, i0, i1) {
   run(g, 1, () => fl, null);
   let frames = 0;
   while (!f0.grounded && frames < 300) { SIM.step(g, [I(), I()]); frames++; }
-  approx(f0.y, C.PLATS[1].y0 - C.FH / 2, 1e-6, 'caught by the low step\'s underside mid-flip');
+  approx(f0.y, C.PLATS[0].y0 - C.FH / 2, 1e-6, 'caught by the low shelf\'s underside mid-flip');
   ok(f0.g === -1 && f0.grounded, 'standing (inverted) on the platform');
 }
 {
   // BOTH platforms collide on BOTH faces
-  const clearX = [10.0, 3.0]; // columns where ONLY that platform is in the way
+  const clearX = [3.0, 12.0]; // columns where ONLY that platform is in the way
   for (let pi = 0; pi < C.PLATS.length; pi++) {
     const p = C.PLATS[pi];
     const cx = clearX[pi];
@@ -287,9 +287,10 @@ function run(g, n, i0, i1) {
     for (let k = 0; k < 120 && !f.grounded; k++) SIM.step(g, [I(), I()]);
     approx(f.y, p.y0 - C.FH / 2, 1e-6, `platform ${pi}: grav-up fighter rests on the underside`);
   }
-  // and the step gap is jumpable: low top -> high top
-  ok(C.PLATS[0].y1 - C.PLATS[1].y1 < 2.5, 'high step is reachable by jumping from the low step');
-  ok(C.PLATS[1].x1 > C.PLATS[0].x0, 'the two steps overlap mid-field');
+  // staggered overlap preserved: descending from the high shelf's top lands
+  // on the low shelf's top in the overlap band, and the two shelves overlap
+  ok(C.PLATS[1].y0 - C.PLATS[0].y1 > C.FH + 1, 'clear air between the shelves to fight in');
+  ok(C.PLATS[0].x1 > C.PLATS[1].x0, 'the two shelves overlap mid-field');
 }
 
 // ---------------- KO / round / match flow ----------------
@@ -364,13 +365,27 @@ function run(g, n, i0, i1) {
   ok(g.screen === 'intro' && g.roundNum === 1, 'next round follows a pit death normally');
 }
 {
-  // the ceiling has no pit: walking the same span up there is safe
+  // the ceiling crack: a gravity-up fighter walking over it falls UP in and dies
   const g = fightReady();
-  const f1 = g.fighters[1]; // ceiling fighter
-  f1.x = 10.6;
-  const mv = I(); mv.mx = 1;
-  run(g, 300, null, () => mv);
-  ok(f1.state !== 'ko' && f1.grounded && g.screen === 'fight', 'ceiling is whole — the asymmetry');
+  const f1 = g.fighters[1]; // ceiling fighter, g = -1
+  f1.x = 5.4; // just right of the ceiling crack (2.5-4.5)
+  const mv = I(); mv.mx = -1;
+  let evs = [];
+  for (let k = 0; k < 300 && g.screen === 'fight'; k++) evs = evs.concat(SIM.step(g, [I(), mv]));
+  ok(evs.some(e => e.type === 'pitdeath' && e.victim === 1 && e.ceiling === true),
+    'walking across the ceiling crack: pitdeath fires (ceiling-flagged)');
+  ok(g.screen === 'roundend' && g.roundWinner === 0 && g.roundEndCause === 'pit',
+    'ceiling pit death awards the round to the floor fighter');
+}
+{
+  // and the mirror span of each crack on the OTHER surface is safe ground
+  const g = fightReady();
+  const [f0, f1] = g.fighters;
+  f0.x = 3.5; // floor fighter standing under the ceiling crack
+  f1.x = 12.5; // ceiling fighter standing over the floor crack
+  run(g, 120);
+  ok(f0.grounded && f1.grounded && g.screen === 'fight',
+    'each crack burns only its own surface — the far surface there is solid');
 }
 {
   // knocked in: a heavy on a grounded victim near the edge carries them in
@@ -387,6 +402,24 @@ function run(g, n, i0, i1) {
   ok(evs.some(e => e.type === 'hit'), 'the edge heavy connects');
   ok(evs.some(e => e.type === 'pitdeath' && e.victim === 1), 'knockback carries the victim into the fire');
   ok(g.roundEndCause === 'pit' && g.roundWinner === 0, 'knockback pit kill credits the attacker');
+}
+{
+  // MIRROR: same knockback shove on the ceiling, into the ceiling crack.
+  // Exact point-reflection of the test above — symmetry verified, not assumed.
+  const g = fightReady();
+  const [f0, f1] = g.fighters;
+  f0.x = 16 - 7.8; f0.g = -1; f0.y = C.AH - C.FH / 2; f0.facing = -1; f0.grounded = true;
+  f1.x = 16 - 10.0; f1.g = -1; f1.y = C.AH - C.FH / 2; f1.facing = 1; f1.grounded = true;
+  const h = I(); h.heavy = true;
+  let first = true, evs = [];
+  for (let k = 0; k < 240 && g.screen === 'fight'; k++) {
+    evs = evs.concat(SIM.step(g, [first ? h : I(), I()]));
+    first = false;
+  }
+  ok(evs.some(e => e.type === 'hit'), 'mirrored edge heavy connects on the ceiling');
+  ok(evs.some(e => e.type === 'pitdeath' && e.victim === 1 && e.ceiling === true),
+    'mirrored knockback carries the victim up into the ceiling fire');
+  ok(g.roundEndCause === 'pit' && g.roundWinner === 0, 'mirrored pit kill credits the attacker');
 }
 
 // ---------------- airborne knockback ----------------
@@ -438,6 +471,62 @@ function run(g, n, i0, i1) {
   const mid = launch(8.0), near = launch(9.5);
   ok(mid.hit && !mid.died, 'midair heavy from mid-arena (x=8.0): lands short of the fire');
   ok(near.hit && near.died, 'midair heavy near the pit (x=9.5): straight in');
+
+  // MIRROR of the danger map on the ceiling (point-reflected coordinates):
+  // don't assume the symmetry holds — measure it
+  const launchUp = (vx0) => {
+    const g = fightReady();
+    const [f0, f1] = g.fighters;
+    f0.x = vx0 + 2.2; f0.facing = -1; f0.g = -1; f0.y = C.AH - C.FH / 2; f0.grounded = true;
+    f1.g = -1;
+    let hit = false, died = false;
+    const h = I(); h.heavy = true;
+    let first = true;
+    for (let k = 0; k < 240 && g.screen === 'fight'; k++) {
+      if (!hit) { f1.x = vx0; f1.y = C.AH - C.FH / 2 - 1.2; f1.vx = 0; f1.vy = 0; f1.grounded = false; f1.facing = 1; }
+      SIM.step(g, [first ? h : I(), I()]);
+      first = false;
+      if (g.events.some(e => e.type === 'hit')) hit = true;
+      if (g.events.some(e => e.type === 'pitdeath' && e.victim === 1)) died = true;
+    }
+    return { hit, died };
+  };
+  const midUp = launchUp(16 - 8.0), nearUp = launchUp(16 - 9.5);
+  ok(midUp.hit && !midUp.died, 'ceiling mirror: midair heavy from mid-arena lands short of the ceiling fire');
+  ok(nearUp.hit && nearUp.died, 'ceiling mirror: midair heavy near the ceiling crack sends them up into it');
+}
+
+// ---------------- the fairness law: exact 180° rotational symmetry ----------------
+{
+  // Rotate the arena definition half a turn about (AW/2, AH/2): platforms,
+  // pits, and spawns must map exactly onto themselves. Future arena edits
+  // that break fairness fail here.
+  const rx = (x) => C.AW - x, ry = (y) => C.AH - y;
+  const eq = (a, b) => Math.abs(a - b) < 1e-9;
+  for (const p of C.PLATS) {
+    const found = C.PLATS.some(q =>
+      eq(q.x0, rx(p.x1)) && eq(q.x1, rx(p.x0)) && eq(q.y0, ry(p.y1)) && eq(q.y1, ry(p.y0)));
+    ok(found, `platform (${p.x0}..${p.x1} @ ${p.y0}..${p.y1}) has its exact point-reflection`);
+  }
+  for (const p of C.PITS) {
+    const found = C.PITS.some(q =>
+      q.ceiling === !p.ceiling && eq(q.x0, rx(p.x1)) && eq(q.x1, rx(p.x0)));
+    ok(found, `pit (${p.x0}..${p.x1}, ${p.ceiling ? 'ceiling' : 'floor'}) reflects onto the opposite surface`);
+  }
+  ok(C.PITS.length === 2 && C.PITS.filter(p => p.ceiling).length === 1, 'exactly one crack per surface');
+  for (const round of [0, 1]) {
+    const g = SIM.createGame();
+    SIM.spawn(g.fighters[0], round);
+    SIM.spawn(g.fighters[1], round);
+    const [a, b] = g.fighters;
+    ok(eq(b.x, rx(a.x)) && eq(b.y, ry(a.y)) && b.g === -a.g && b.facing === -a.facing,
+      `round ${round + 1} spawns are exact point-reflections (position, gravity, facing)`);
+    for (const p of C.PITS) {
+      const mid = (p.x0 + p.x1) / 2, half = (p.x1 - p.x0) / 2;
+      ok(Math.abs(a.x - mid) > half + 0.9 && Math.abs(b.x - mid) > half + 0.9,
+        `round ${round + 1} spawns clear the ${p.ceiling ? 'ceiling' : 'floor'} crack comfortably`);
+    }
+  }
 }
 
 // ---------------- long soak: no NaN, nobody escapes the box ----------------
@@ -460,7 +549,7 @@ function run(g, n, i0, i1) {
     if (g.screen === 'over') SIM.resetMatch(g);
     for (const f of g.fighters) {
       if (!Number.isFinite(f.x) || !Number.isFinite(f.y) || !Number.isFinite(f.vx) || !Number.isFinite(f.vy)) sane = false;
-      if (f.x < -1 || f.x > C.AW + 1 || f.y < C.SINK_Y - 0.1 || f.y > C.AH + 1) sane = false;
+      if (f.x < -1 || f.x > C.AW + 1 || f.y < -C.SINK - 0.1 || f.y > C.AH + C.SINK + 0.1) sane = false;
       if (!Number.isFinite(f.hp) || f.hp < 0 || f.hp > C.HP) sane = false;
     }
     if (!sane) { console.log('  broke at tick ' + k); break; }

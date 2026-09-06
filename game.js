@@ -51,12 +51,16 @@ let game = SIM.createGame();
 let ai = AI_ON ? SIM.createAI((Date.now() % 100000) | 1) : null;
 
 // ---------- layout ----------
+// uiM: how "iPad" the display is (0 on phones, 1 on full tablet width). All
+// roomy-layout terms multiply by uiM, so phone layout is byte-identical.
+let uiM = 0;
 function resize() {
   dpr = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = Math.floor(W * dpr); canvas.height = Math.floor(H * dpr);
   canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
-  zoneH = Math.max(108, Math.min(230, H * 0.205));
+  uiM = Math.max(0, Math.min(1, (W - 430) / (1024 - 430)));
+  zoneH = Math.max(108, Math.min(230 + 60 * uiM, H * 0.205));
   const sideM = 6, gapY = 34; // gapY leaves room for the HUD bars
   const availW = W - sideM * 2, availH = H - zoneH * 2 - gapY * 2;
   ar.s = Math.min(availW / C.AW, availH / C.AH);
@@ -81,10 +85,35 @@ function prerenderBg() {
   rg.addColorStop(0, '#1b1520'); rg.addColorStop(0.5, '#151019'); rg.addColorStop(1, '#1b1520');
   b.fillStyle = rg; b.fillRect(0, 0, W, H);
 
-  // lacquered plank texture in the control zones
+  // the lacquer TABLE the panel rests on: fine wood grain across the whole
+  // surround, so surplus screen on tablets reads as tabletop, not dead margin
+  let gseed = 4241;
+  const grnd = () => (gseed = (gseed * 16807) % 2147483647) / 2147483647;
+  for (let y = -8; y < H + 8; y += 20) {
+    const wob = grnd() * 9;
+    b.strokeStyle = 'rgba(120,90,110,0.05)';
+    b.lineWidth = 1 + grnd() * 5;
+    b.globalAlpha = 0.35 + grnd() * 0.4;
+    b.beginPath();
+    b.moveTo(-10, y + wob);
+    b.bezierCurveTo(W * 0.33, y + wob + (grnd() - 0.5) * 12, W * 0.66, y + wob + (grnd() - 0.5) * 12, W + 10, y + wob);
+    b.stroke();
+  }
+  b.globalAlpha = 1;
+  b.strokeStyle = 'rgba(0,0,0,0.16)';
+  for (let i = 0; i < 14; i++) {
+    const y = grnd() * H;
+    b.lineWidth = 0.8 + grnd() * 1.4;
+    b.beginPath();
+    b.moveTo(-10, y);
+    b.bezierCurveTo(W * 0.3, y + (grnd() - 0.5) * 16, W * 0.7, y + (grnd() - 0.5) * 16, W + 10, y);
+    b.stroke();
+  }
+
+  // lacquered plank strips mark each player's control zone
   const planks = (y0, y1) => {
     b.save(); b.beginPath(); b.rect(0, y0, W, y1 - y0); b.clip();
-    b.fillStyle = '#201620'; b.fillRect(0, y0, W, y1 - y0);
+    b.fillStyle = 'rgba(32,22,32,0.75)'; b.fillRect(0, y0, W, y1 - y0);
     for (let y = y0; y < y1; y += 26) {
       b.strokeStyle = 'rgba(0,0,0,0.35)'; b.lineWidth = 1.5;
       b.beginPath(); b.moveTo(0, y); b.lineTo(W, y); b.stroke();
@@ -95,12 +124,20 @@ function prerenderBg() {
   };
   planks(0, zoneH); planks(H - zoneH, H);
 
-  // wooden frame around the panel
+  // soft shadow under the panel — it sits ON the table
   const ft = Math.max(7, ar.s * 0.35);
+  for (let i = 3; i >= 1; i--) {
+    b.fillStyle = 'rgba(0,0,0,0.10)';
+    b.fillRect(ar.x - ft - i * 3, ar.y - ft - i * 3 + 4, ar.w + (ft + i * 3) * 2, ar.h + (ft + i * 3) * 2);
+  }
+
+  // wooden frame around the panel, with a thin outer pinstripe
   b.fillStyle = WOOD;
   b.fillRect(ar.x - ft, ar.y - ft, ar.w + ft * 2, ar.h + ft * 2);
   b.strokeStyle = WOOD_HI; b.lineWidth = 2;
   b.strokeRect(ar.x - ft + 1.5, ar.y - ft + 1.5, ar.w + ft * 2 - 3, ar.h + ft * 2 - 3);
+  b.strokeStyle = 'rgba(220,200,160,0.09)'; b.lineWidth = 1;
+  b.strokeRect(ar.x - ft - 5.5, ar.y - ft - 5.5, ar.w + ft * 2 + 11, ar.h + ft * 2 + 11);
 
   // the paper: warm, backlit from the centre
   const pg = b.createRadialGradient(ar.x + ar.w / 2, ar.y + ar.h / 2, ar.h * 0.1, ar.x + ar.w / 2, ar.y + ar.h / 2, ar.h * 0.75);
@@ -180,6 +217,30 @@ function prerenderBg() {
   };
   seal(ar.x + 20, ar.y1 - 20, P0COL, -0.06);
   seal(ar.x + ar.w - 20, ar.y + 20, P1COL, Math.PI - 0.06);
+
+  // wide-margin flourishes (tablets): faint ink washes and table seals in
+  // the surround — point-symmetric pairs, of course. Phones (thin margins)
+  // never reach this.
+  const marginW = ar.x - ft;
+  if (marginW > 48) {
+    const mcx = marginW / 2 + 2;
+    // faint enso ink-wash rings on the tabletop, one per side
+    const enso = (ex, ey, a0) => {
+      b.strokeStyle = 'rgba(150,115,80,0.07)';
+      b.lineWidth = Math.min(14, marginW * 0.16);
+      b.lineCap = 'round';
+      b.beginPath(); b.arc(ex, ey, Math.min(marginW * 0.34, 58), a0, a0 + 5.1); b.stroke();
+    };
+    enso(mcx, H * 0.5, 0.7);
+    enso(W - mcx, H * 0.5, 0.7 + Math.PI);
+    // brushed table seals near each player's resting corners
+    seal(mcx, H - zoneH - 34, P0COL, 0.1);
+    seal(W - mcx, zoneH + 34, P1COL, Math.PI + 0.1);
+    // a light ink stroke framing each margin edge
+    b.strokeStyle = 'rgba(220,200,160,0.05)'; b.lineWidth = 2;
+    b.beginPath(); b.moveTo(mcx, zoneH + 12); b.lineTo(mcx, H - zoneH - 12); b.stroke();
+    b.beginPath(); b.moveTo(W - mcx, zoneH + 12); b.lineTo(W - mcx, H - zoneH - 12); b.stroke();
+  }
 }
 
 // ---------- audio: tiny ink-dojo synth ----------
@@ -245,14 +306,18 @@ function makeTouchState() {
 const touch = [makeTouchState(), makeTouchState()];
 
 // Button positions in the OWNER's local frame (bottom-strip coords).
+// On wide displays (uiM > 0) the cluster grows and slides toward the corner,
+// where tablet thumbs naturally rest; at uiM = 0 this is the phone layout.
 function buttonsLocal() {
   const bz = zoneH;
-  const r1 = Math.min(bz * 0.235, W * 0.085); // quick/heavy radius
+  // grow tap targets with the display, but never past what the cluster
+  // geometry can fit (the bz cap only ever binds when uiM > 0)
+  const r1 = Math.min(Math.min(bz * 0.235, W * 0.085) * (1 + 0.15 * uiM), bz * 0.24);
   const r2 = r1 * 0.92;
   return {
-    quick: { x: W * 0.635, y: H - bz * 0.36, r: r1 },
-    heavy: { x: W * 0.875, y: H - bz * 0.42, r: r1 },
-    flip: { x: W * 0.745, y: H - bz * 0.75, r: r2 },
+    quick: { x: W * (0.635 + 0.035 * uiM), y: H - bz * 0.36, r: r1 },
+    heavy: { x: W * (0.875 + 0.02 * uiM), y: H - bz * 0.42, r: r1 },
+    flip: { x: W * (0.745 + 0.03 * uiM), y: H - bz * 0.75, r: r2 },
   };
 }
 // screen coords -> player local frame (0: identity, 1: rotate 180)
@@ -818,7 +883,7 @@ function withRot180(cx, cy, fn) {
 // Draw one player's bar/pips laid out for the BOTTOM edge at band centre cy.
 function drawHudBand(i, cy) {
   const f = game.fighters[i];
-  const bw = Math.min(W * 0.56, 340), bh = 13;
+  const bw = Math.min(W * 0.56, 340 + 200 * uiM), bh = 13 + 4 * uiM;
   const bx = W * 0.06, by = cy - bh / 2;
   // brush-stroke trough
   ctx.fillStyle = 'rgba(34,28,38,0.5)';
@@ -834,13 +899,14 @@ function drawHudBand(i, cy) {
   }
   // name lives inside the bar so it never collides with the arena frame
   ctx.fillStyle = 'rgba(240,230,205,0.92)';
-  ctx.font = `700 10px ${FONT}`;
+  ctx.font = `700 ${10 + 3 * uiM}px ${FONT}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillText(PNAME[i] + (AI_ON && i === 1 ? ' · AI' : ''), bx + 7, cy + 0.5);
   // round pips
+  const pipR = 5.5 + 2 * uiM, pipGap = 18 + 6 * uiM;
   for (let k = 0; k < C.ROUNDS_TO_WIN; k++) {
-    const cxp = bx + bw + 18 + k * 18;
-    ctx.beginPath(); ctx.arc(cxp, cy, 5.5, 0, Math.PI * 2);
+    const cxp = bx + bw + pipGap + k * pipGap;
+    ctx.beginPath(); ctx.arc(cxp, cy, pipR, 0, Math.PI * 2);
     if (k < game.wins[i]) { ctx.fillStyle = PCOL[i]; ctx.fill(); }
     else { ctx.strokeStyle = 'rgba(240,230,205,0.5)'; ctx.lineWidth = 1.5; ctx.stroke(); }
   }
@@ -884,8 +950,8 @@ function drawZoneFor(p) {
   const dim = AI_ON && p === 1 ? 0.3 : 1;
   ctx.globalAlpha = dim;
 
-  // move pad (left half)
-  const pcx = W * 0.25, pcy = H - bz * 0.52;
+  // move pad (left half) — drifts toward the corner on wide displays
+  const pcx = W * (0.25 - 0.06 * uiM), pcy = H - bz * 0.52;
   if (ts.move) {
     ctx.strokeStyle = ts.blockHeld ? col : 'rgba(240,230,205,0.5)';
     ctx.lineWidth = 2;
@@ -979,26 +1045,27 @@ function bothEdgesText(lines, colMain) {
 }
 function drawBanners() {
   const g = game;
+  const cap = (v) => v * (1 + 0.4 * uiM); // banner type grows with the display
   if (g.screen === 'intro') {
     const last = g.wins[0] === C.ROUNDS_TO_WIN - 1 && g.wins[1] === C.ROUNDS_TO_WIN - 1;
     if (g.introT < C.INTRO_F - 26) {
-      bothEdgesText([[last ? 'FINAL ROUND' : `ROUND ${g.roundNum + 1}`, Math.min(40, W * 0.09)]], INK);
+      bothEdgesText([[last ? 'FINAL ROUND' : `ROUND ${g.roundNum + 1}`, Math.min(cap(40), W * 0.09)]], INK);
     } else {
-      bothEdgesText([['FIGHT', Math.min(54, W * 0.12)]], P0COL);
+      bothEdgesText([['FIGHT', Math.min(cap(54), W * 0.12)]], P0COL);
     }
   } else if (g.screen === 'roundend') {
     const w = g.roundWinner;
     const pit = g.roundEndCause === 'pit';
     bothEdgesText([
-      pit ? ['INTO THE FIRE', Math.min(36, W * 0.085), '#c8511f'] : ['K.O.', Math.min(56, W * 0.13), INK],
-      [`${PNAME[w]} takes the round`, Math.min(19, W * 0.045), PCOL[w]],
+      pit ? ['INTO THE FIRE', Math.min(cap(36), W * 0.085), '#c8511f'] : ['K.O.', Math.min(cap(56), W * 0.13), INK],
+      [`${PNAME[w]} takes the round`, Math.min(cap(19), W * 0.045), PCOL[w]],
     ]);
   } else if (g.screen === 'over') {
     const w = g.winner;
     bothEdgesText([
-      [`${PNAME[w]} WINS`, Math.min(42, W * 0.1), PCOL[w]],
-      [`${g.wins[0]} — ${g.wins[1]}`, Math.min(24, W * 0.06), INK],
-      ['tap for a rematch', Math.min(15, W * 0.038), 'rgba(34,28,38,0.75)'],
+      [`${PNAME[w]} WINS`, Math.min(cap(42), W * 0.1), PCOL[w]],
+      [`${g.wins[0]} — ${g.wins[1]}`, Math.min(cap(24), W * 0.06), INK],
+      ['tap for a rematch', Math.min(cap(15), W * 0.038), 'rgba(34,28,38,0.75)'],
     ]);
   }
 }
@@ -1206,7 +1273,7 @@ window.__g = {
   AI_ON,
   get game() { return game; },
   get shell() { return shell; },
-  get layout() { return { W, H, zoneH, ar: Object.assign({}, ar) }; },
+  get layout() { return { W, H, zoneH, uiM, ar: Object.assign({}, ar), buttons: buttonsLocal() }; },
   start() { startGame(); },
   rematch() { rematch(); },
   step(n) { for (let i = 0; i < (n || 1); i++) stepSim(); },

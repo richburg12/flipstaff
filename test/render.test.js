@@ -183,4 +183,44 @@ function boot(search, w, h) {
   ok(true, 'render smoke across 320x568 / 430x932 / 768x1024 / 1280x720');
 }
 
+// ---------------- aspect clamp + roomy-UI layout invariants ----------------
+{
+  const AW = 16, AH = 18;
+  // phones, iPads (portrait + the squarer 4:3), and a desktop window
+  for (const [w, h] of [[390, 780], [430, 932], [820, 1180], [768, 1024], [834, 1112], [1024, 1366]]) {
+    const g = boot('', w, h);
+    const L = g.layout;
+    const C = g.SIM.C;
+    // arena aspect NEVER distorts: pixel rect is an exact scale of 16x18
+    ok(Math.abs(L.ar.w / L.ar.h - AW / AH) < 1e-9, `${w}x${h}: arena aspect exact (16:18)`);
+    ok(Math.abs(L.ar.w - C.AW * L.ar.s) < 1e-6 && Math.abs(L.ar.h - C.AH * L.ar.s) < 1e-6,
+      `${w}x${h}: arena rect is scale x world, no stretch`);
+    // arena stays inside the play band, clear of both control zones
+    ok(L.ar.x >= 0 && L.ar.x + L.ar.w <= w + 1e-6, `${w}x${h}: arena inside horizontally`);
+    ok(L.ar.y >= L.zoneH && L.ar.y1 <= h - L.zoneH, `${w}x${h}: arena clear of both touch zones`);
+    // buttons: inside the owner's button half, above the bottom, no overlap
+    const B = L.buttons;
+    let btnOk = true;
+    for (const k of ['quick', 'heavy', 'flip']) {
+      const bt = B[k];
+      if (bt.x - bt.r < w / 2 || bt.x + bt.r > w) btnOk = false;
+      if (bt.y - bt.r < h - L.zoneH || bt.y + bt.r > h) btnOk = false;
+    }
+    const gap = (a, b2) => Math.hypot(a.x - b2.x, a.y - b2.y) - a.r - b2.r;
+    if (gap(B.quick, B.heavy) < 2 || gap(B.quick, B.flip) < 2 || gap(B.heavy, B.flip) < 2) btnOk = false;
+    ok(btnOk, `${w}x${h}: buttons inside their zone half and non-overlapping`);
+    // uiM behavior: zero on phones (layout byte-identical), grows on tablets
+    if (w <= 430) {
+      ok(L.uiM === 0, `${w}x${h}: phone spread factor is exactly 0`);
+      ok(B.quick.x === w * 0.635 && B.heavy.x === w * 0.875 && B.flip.x === w * 0.745,
+        `${w}x${h}: phone button positions pinned to the original layout`);
+      ok(B.quick.r === Math.min(L.zoneH * 0.235, w * 0.085), `${w}x${h}: phone button radius pinned`);
+    } else {
+      ok(L.uiM > 0, `${w}x${h}: tablet spread factor engaged (uiM=${L.uiM.toFixed(2)})`);
+      const phoneR = Math.min(L.zoneH * 0.235, w * 0.085);
+      ok(B.quick.r > phoneR, `${w}x${h}: tap targets grow with the display`);
+    }
+  }
+}
+
 process.exit(failed);

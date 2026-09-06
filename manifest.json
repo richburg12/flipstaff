@@ -1,0 +1,13 @@
+{
+  "name": "FLIPSTAFF",
+  "short_name": "FLIPSTAFF",
+  "description": "A staff duel in a box — two players, one phone, face to face.",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#17131d",
+  "theme_color": "#17131d",
+  "start_url": "/",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
